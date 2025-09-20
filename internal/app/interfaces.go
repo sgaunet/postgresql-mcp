@@ -2,6 +2,24 @@ package app
 
 import (
 	"database/sql"
+	"errors"
+)
+
+// Error variables for static errors.
+var (
+	ErrConnectionRequired = errors.New(
+		"database connection failed. Please check POSTGRES_URL or DATABASE_URL environment variable",
+	)
+	ErrSchemaRequired       = errors.New("schema name is required")
+	ErrTableRequired        = errors.New("table name is required")
+	ErrQueryRequired        = errors.New("query is required")
+	ErrInvalidQuery         = errors.New("only SELECT and WITH queries are allowed")
+	ErrNoConnectionString = errors.New(
+		"no database connection string found in POSTGRES_URL or DATABASE_URL environment variables",
+	)
+	ErrNoDatabaseConnection = errors.New("no database connection")
+	ErrTableNotFound        = errors.New("table does not exist")
+	ErrMarshalFailed        = errors.New("failed to marshal data to JSON")
 )
 
 // DatabaseInfo represents basic database metadata.
@@ -56,32 +74,39 @@ type QueryResult struct {
 	RowCount int            `json:"row_count"`
 }
 
-// PostgreSQLClient interface for database operations.
-type PostgreSQLClient interface {
-	// Connection management
+// ConnectionManager handles database connection operations.
+type ConnectionManager interface {
 	Connect(connectionString string) error
 	Close() error
 	Ping() error
+	GetDB() *sql.DB
+}
 
-	// Database operations
+// DatabaseExplorer handles database-level operations.
+type DatabaseExplorer interface {
 	ListDatabases() ([]*DatabaseInfo, error)
 	GetCurrentDatabase() (string, error)
-
-	// Schema operations
 	ListSchemas() ([]*SchemaInfo, error)
+}
 
-	// Table operations
+// TableExplorer handles table-level operations.
+type TableExplorer interface {
 	ListTables(schema string) ([]*TableInfo, error)
 	DescribeTable(schema, table string) ([]*ColumnInfo, error)
 	GetTableStats(schema, table string) (*TableInfo, error)
-
-	// Index operations
 	ListIndexes(schema, table string) ([]*IndexInfo, error)
+}
 
-	// Query operations
+// QueryExecutor handles query operations.
+type QueryExecutor interface {
 	ExecuteQuery(query string, args ...interface{}) (*QueryResult, error)
 	ExplainQuery(query string, args ...interface{}) (*QueryResult, error)
+}
 
-	// Utility methods
-	GetDB() *sql.DB
+// PostgreSQLClient interface combines all database operations.
+type PostgreSQLClient interface {
+	ConnectionManager
+	DatabaseExplorer
+	TableExplorer
+	QueryExecutor
 }

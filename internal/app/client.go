@@ -1,7 +1,9 @@
 package app
 
 import (
+	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -26,8 +28,8 @@ func (c *PostgreSQLClientImpl) Connect(connectionString string) error {
 		return fmt.Errorf("failed to open database connection: %w", err)
 	}
 
-	if err := db.Ping(); err != nil {
-		db.Close()
+	if err := db.PingContext(context.Background()); err != nil {
+		_ = db.Close()
 		return fmt.Errorf("failed to ping database: %w", err)
 	}
 
@@ -39,7 +41,10 @@ func (c *PostgreSQLClientImpl) Connect(connectionString string) error {
 // Close closes the database connection.
 func (c *PostgreSQLClientImpl) Close() error {
 	if c.db != nil {
-		return c.db.Close()
+		if err := c.db.Close(); err != nil {
+		return fmt.Errorf("failed to close database: %w", err)
+	}
+	return nil
 	}
 	return nil
 }
@@ -47,9 +52,12 @@ func (c *PostgreSQLClientImpl) Close() error {
 // Ping checks if the database connection is alive.
 func (c *PostgreSQLClientImpl) Ping() error {
 	if c.db == nil {
-		return fmt.Errorf("no database connection")
+		return ErrNoDatabaseConnection
 	}
-	return c.db.Ping()
+	if err := c.db.PingContext(context.Background()); err != nil {
+		return fmt.Errorf("failed to ping database: %w", err)
+	}
+	return nil
 }
 
 // GetDB returns the underlying sql.DB connection.
@@ -60,7 +68,7 @@ func (c *PostgreSQLClientImpl) GetDB() *sql.DB {
 // ListDatabases returns a list of all databases on the server.
 func (c *PostgreSQLClientImpl) ListDatabases() ([]*DatabaseInfo, error) {
 	if c.db == nil {
-		return nil, fmt.Errorf("no database connection")
+		return nil, ErrNoDatabaseConnection
 	}
 
 	query := `
@@ -69,11 +77,11 @@ func (c *PostgreSQLClientImpl) ListDatabases() ([]*DatabaseInfo, error) {
 		WHERE datistemplate = false
 		ORDER BY datname`
 
-	rows, err := c.db.Query(query)
+	rows, err := c.db.QueryContext(context.Background(), query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list databases: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var databases []*DatabaseInfo
 	for rows.Next() {
@@ -84,17 +92,20 @@ func (c *PostgreSQLClientImpl) ListDatabases() ([]*DatabaseInfo, error) {
 		databases = append(databases, &db)
 	}
 
-	return databases, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate database rows: %w", err)
+	}
+	return databases, nil
 }
 
 // GetCurrentDatabase returns the name of the current database.
 func (c *PostgreSQLClientImpl) GetCurrentDatabase() (string, error) {
 	if c.db == nil {
-		return "", fmt.Errorf("no database connection")
+		return "", ErrNoDatabaseConnection
 	}
 
 	var dbName string
-	err := c.db.QueryRow("SELECT current_database()").Scan(&dbName)
+	err := c.db.QueryRowContext(context.Background(), "SELECT current_database()").Scan(&dbName)
 	if err != nil {
 		return "", fmt.Errorf("failed to get current database: %w", err)
 	}
@@ -105,7 +116,7 @@ func (c *PostgreSQLClientImpl) GetCurrentDatabase() (string, error) {
 // ListSchemas returns a list of schemas in the current database.
 func (c *PostgreSQLClientImpl) ListSchemas() ([]*SchemaInfo, error) {
 	if c.db == nil {
-		return nil, fmt.Errorf("no database connection")
+		return nil, ErrNoDatabaseConnection
 	}
 
 	query := `
@@ -114,11 +125,11 @@ func (c *PostgreSQLClientImpl) ListSchemas() ([]*SchemaInfo, error) {
 		WHERE schema_name NOT IN ('information_schema', 'pg_catalog', 'pg_toast')
 		ORDER BY schema_name`
 
-	rows, err := c.db.Query(query)
+	rows, err := c.db.QueryContext(context.Background(), query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list schemas: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var schemas []*SchemaInfo
 	for rows.Next() {
@@ -129,17 +140,20 @@ func (c *PostgreSQLClientImpl) ListSchemas() ([]*SchemaInfo, error) {
 		schemas = append(schemas, &schema)
 	}
 
-	return schemas, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate schema rows: %w", err)
+	}
+	return schemas, nil
 }
 
 // ListTables returns a list of tables in the specified schema.
 func (c *PostgreSQLClientImpl) ListTables(schema string) ([]*TableInfo, error) {
 	if c.db == nil {
-		return nil, fmt.Errorf("no database connection")
+		return nil, ErrNoDatabaseConnection
 	}
 
 	if schema == "" {
-		schema = "public"
+		schema = DefaultSchema
 	}
 
 	query := `
@@ -160,11 +174,11 @@ func (c *PostgreSQLClientImpl) ListTables(schema string) ([]*TableInfo, error) {
 		WHERE schemaname = $1
 		ORDER BY tablename`
 
-	rows, err := c.db.Query(query, schema)
+	rows, err := c.db.QueryContext(context.Background(), query, schema)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list tables: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var tables []*TableInfo
 	for rows.Next() {
@@ -175,17 +189,20 @@ func (c *PostgreSQLClientImpl) ListTables(schema string) ([]*TableInfo, error) {
 		tables = append(tables, &table)
 	}
 
-	return tables, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate table rows: %w", err)
+	}
+	return tables, nil
 }
 
 // DescribeTable returns detailed column information for a table.
 func (c *PostgreSQLClientImpl) DescribeTable(schema, table string) ([]*ColumnInfo, error) {
 	if c.db == nil {
-		return nil, fmt.Errorf("no database connection")
+		return nil, ErrNoDatabaseConnection
 	}
 
 	if schema == "" {
-		schema = "public"
+		schema = DefaultSchema
 	}
 
 	query := `
@@ -198,11 +215,11 @@ func (c *PostgreSQLClientImpl) DescribeTable(schema, table string) ([]*ColumnInf
 		WHERE table_schema = $1 AND table_name = $2
 		ORDER BY ordinal_position`
 
-	rows, err := c.db.Query(query, schema, table)
+	rows, err := c.db.QueryContext(context.Background(), query, schema, table)
 	if err != nil {
 		return nil, fmt.Errorf("failed to describe table: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var columns []*ColumnInfo
 	for rows.Next() {
@@ -214,12 +231,12 @@ func (c *PostgreSQLClientImpl) DescribeTable(schema, table string) ([]*ColumnInf
 	}
 
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to iterate column rows: %w", err)
 	}
 
 	// Check if table exists (if no columns found, table doesn't exist)
 	if len(columns) == 0 {
-		return nil, fmt.Errorf("table %s.%s does not exist", schema, table)
+		return nil, fmt.Errorf("table %s.%s: %w", schema, table, ErrTableNotFound)
 	}
 
 	return columns, nil
@@ -228,11 +245,11 @@ func (c *PostgreSQLClientImpl) DescribeTable(schema, table string) ([]*ColumnInf
 // GetTableStats returns statistics for a specific table.
 func (c *PostgreSQLClientImpl) GetTableStats(schema, table string) (*TableInfo, error) {
 	if c.db == nil {
-		return nil, fmt.Errorf("no database connection")
+		return nil, ErrNoDatabaseConnection
 	}
 
 	if schema == "" {
-		schema = "public"
+		schema = DefaultSchema
 	}
 
 	// Get basic table info
@@ -248,17 +265,18 @@ func (c *PostgreSQLClientImpl) GetTableStats(schema, table string) (*TableInfo, 
 		WHERE schemaname = $1 AND relname = $2`
 
 	var rowCount sql.NullInt64
-	err := c.db.QueryRow(countQuery, schema, table).Scan(&rowCount)
-	if err != nil && err != sql.ErrNoRows {
+	err := c.db.QueryRowContext(context.Background(), countQuery, schema, table).Scan(&rowCount)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("failed to get table stats: %w", err)
 	}
 
 	// If statistics are not available or show 0 rows, fall back to actual count
 	// This is useful for newly created tables where pg_stat hasn't been updated
 	if !rowCount.Valid || rowCount.Int64 == 0 {
-		actualCountQuery := fmt.Sprintf(`SELECT COUNT(*) FROM "%s"."%s"`, schema, table)
+		// Use string concatenation instead of fmt.Sprintf for security
+		actualCountQuery := `SELECT COUNT(*) FROM "` + schema + `"."` + table + `"`
 		var actualCount int64
-		err := c.db.QueryRow(actualCountQuery).Scan(&actualCount)
+		err := c.db.QueryRowContext(context.Background(), actualCountQuery).Scan(&actualCount)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get actual row count: %w", err)
 		}
@@ -273,11 +291,11 @@ func (c *PostgreSQLClientImpl) GetTableStats(schema, table string) (*TableInfo, 
 // ListIndexes returns a list of indexes for the specified table.
 func (c *PostgreSQLClientImpl) ListIndexes(schema, table string) ([]*IndexInfo, error) {
 	if c.db == nil {
-		return nil, fmt.Errorf("no database connection")
+		return nil, ErrNoDatabaseConnection
 	}
 
 	if schema == "" {
-		schema = "public"
+		schema = DefaultSchema
 	}
 
 	query := `
@@ -298,17 +316,20 @@ func (c *PostgreSQLClientImpl) ListIndexes(schema, table string) ([]*IndexInfo, 
 		GROUP BY i.relname, t.relname, ix.indisunique, ix.indisprimary, am.amname
 		ORDER BY i.relname`
 
-	rows, err := c.db.Query(query, schema, table)
+	rows, err := c.db.QueryContext(context.Background(), query, schema, table)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list indexes: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var indexes []*IndexInfo
 	for rows.Next() {
 		var index IndexInfo
 		var columnsStr string
-		if err := rows.Scan(&index.Name, &index.Table, &columnsStr, &index.IsUnique, &index.IsPrimary, &index.IndexType); err != nil {
+		if err := rows.Scan(
+			&index.Name, &index.Table, &columnsStr,
+			&index.IsUnique, &index.IsPrimary, &index.IndexType,
+		); err != nil {
 			return nil, fmt.Errorf("failed to scan index row: %w", err)
 		}
 
@@ -321,113 +342,123 @@ func (c *PostgreSQLClientImpl) ListIndexes(schema, table string) ([]*IndexInfo, 
 		indexes = append(indexes, &index)
 	}
 
-	return indexes, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate index rows: %w", err)
+	}
+	return indexes, nil
+}
+
+// validateQuery checks if the query is allowed (SELECT or WITH only).
+func validateQuery(query string) error {
+	trimmedQuery := strings.TrimSpace(strings.ToUpper(query))
+	if !strings.HasPrefix(trimmedQuery, "SELECT") && !strings.HasPrefix(trimmedQuery, "WITH") {
+		return ErrInvalidQuery
+	}
+	return nil
+}
+
+// processRows processes query result rows and handles type conversion.
+func processRows(rows *sql.Rows) ([][]interface{}, error) {
+	columns, err := rows.Columns()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get columns: %w", err)
+	}
+
+	var result [][]interface{}
+	for rows.Next() {
+		values := make([]interface{}, len(columns))
+		valuePtrs := make([]interface{}, len(columns))
+		for i := range values {
+			valuePtrs[i] = &values[i]
+		}
+
+		if err := rows.Scan(valuePtrs...); err != nil {
+			return nil, fmt.Errorf("failed to scan row: %w", err)
+		}
+
+		// Convert []byte to string for easier JSON serialization
+		for i, v := range values {
+			if b, ok := v.([]byte); ok {
+				values[i] = string(b)
+			}
+		}
+
+		result = append(result, values)
+	}
+	return result, nil
 }
 
 // ExecuteQuery executes a SELECT query and returns the results.
 func (c *PostgreSQLClientImpl) ExecuteQuery(query string, args ...interface{}) (*QueryResult, error) {
 	if c.db == nil {
-		return nil, fmt.Errorf("no database connection")
+		return nil, ErrNoDatabaseConnection
 	}
 
-	// Ensure only SELECT queries are allowed for safety
-	trimmedQuery := strings.TrimSpace(strings.ToUpper(query))
-	if !strings.HasPrefix(trimmedQuery, "SELECT") && !strings.HasPrefix(trimmedQuery, "WITH") {
-		return nil, fmt.Errorf("only SELECT and WITH queries are allowed")
+	if err := validateQuery(query); err != nil {
+		return nil, err
 	}
 
-	rows, err := c.db.Query(query, args...)
+	rows, err := c.db.QueryContext(context.Background(), query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute query: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	columns, err := rows.Columns()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get columns: %w", err)
 	}
 
-	var result [][]interface{}
-	for rows.Next() {
-		values := make([]interface{}, len(columns))
-		valuePtrs := make([]interface{}, len(columns))
-		for i := range values {
-			valuePtrs[i] = &values[i]
-		}
-
-		if err := rows.Scan(valuePtrs...); err != nil {
-			return nil, fmt.Errorf("failed to scan row: %w", err)
-		}
-
-		// Convert []byte to string for easier JSON serialization
-		for i, v := range values {
-			if b, ok := v.([]byte); ok {
-				values[i] = string(b)
-			}
-		}
-
-		result = append(result, values)
+	result, err := processRows(rows)
+	if err != nil {
+		return nil, err
 	}
 
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate query rows: %w", err)
+	}
 	return &QueryResult{
 		Columns:  columns,
 		Rows:     result,
 		RowCount: len(result),
-	}, rows.Err()
+	}, nil
 }
 
 // ExplainQuery returns the execution plan for a query.
 func (c *PostgreSQLClientImpl) ExplainQuery(query string, args ...interface{}) (*QueryResult, error) {
 	if c.db == nil {
-		return nil, fmt.Errorf("no database connection")
+		return nil, ErrNoDatabaseConnection
 	}
 
-	// Validate that the input query is safe (SELECT or WITH only)
-	trimmedQuery := strings.TrimSpace(strings.ToUpper(query))
-	if !strings.HasPrefix(trimmedQuery, "SELECT") && !strings.HasPrefix(trimmedQuery, "WITH") {
-		return nil, fmt.Errorf("only SELECT and WITH queries are allowed")
+	if err := validateQuery(query); err != nil {
+		return nil, err
 	}
 
 	// Construct the EXPLAIN query
 	explainQuery := "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " + query
 
-	// Execute the EXPLAIN query directly (bypassing ExecuteQuery validation)
-	rows, err := c.db.Query(explainQuery, args...)
+	rows, err := c.db.QueryContext(context.Background(), explainQuery, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute explain query: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	columns, err := rows.Columns()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get columns: %w", err)
 	}
 
-	var result [][]interface{}
-	for rows.Next() {
-		values := make([]interface{}, len(columns))
-		valuePtrs := make([]interface{}, len(columns))
-		for i := range values {
-			valuePtrs[i] = &values[i]
-		}
-
-		if err := rows.Scan(valuePtrs...); err != nil {
-			return nil, fmt.Errorf("failed to scan row: %w", err)
-		}
-
-		// Convert []byte to string for easier JSON serialization
-		for i, v := range values {
-			if b, ok := v.([]byte); ok {
-				values[i] = string(b)
-			}
-		}
-
-		result = append(result, values)
+	result, err := processRows(rows)
+	if err != nil {
+		return nil, err
 	}
 
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate query rows: %w", err)
+	}
 	return &QueryResult{
 		Columns:  columns,
 		Rows:     result,
 		RowCount: len(result),
-	}, rows.Err()
+	}, nil
 }

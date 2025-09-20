@@ -129,54 +129,105 @@ func setupListTablesTool(s *server.MCPServer, appInstance *app.App, debugLogger 
 	})
 }
 
-// setupDescribeTableTool creates and registers the describe_table tool.
-func setupDescribeTableTool(s *server.MCPServer, appInstance *app.App, debugLogger *slog.Logger) {
-	describeTableTool := mcp.NewTool("describe_table",
-		mcp.WithDescription("Get detailed information about a table's structure (columns, types, constraints)"),
+// handleTableSchemaToolRequest handles tool requests that require table and optional schema parameters.
+func handleTableSchemaToolRequest(
+	args map[string]interface{},
+	debugLogger *slog.Logger,
+	toolName string,
+) (string, string, error) {
+	// Extract table name (required)
+	table, ok := args["table"].(string)
+	if !ok || table == "" {
+		debugLogger.Error("table name is missing or not a string", "value", args["table"], "tool", toolName)
+		return "", "", app.ErrTableRequired
+	}
+
+	// Extract schema (optional)
+	schema := "public"
+	if schemaArg, ok := args["schema"].(string); ok && schemaArg != "" {
+		schema = schemaArg
+	}
+
+	debugLogger.Debug(fmt.Sprintf("Processing %s request", toolName), "schema", schema, "table", table)
+	return table, schema, nil
+}
+
+// marshalToJSON converts data to JSON and handles errors.
+func marshalToJSON(data interface{}, debugLogger *slog.Logger, errorMsg string) ([]byte, error) {
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		debugLogger.Error("Failed to marshal data to JSON", "error", err, "context", errorMsg)
+		return nil, fmt.Errorf("%s: %w", errorMsg, app.ErrMarshalFailed)
+	}
+	return jsonData, nil
+}
+
+// TableToolConfig holds configuration for table-based tools.
+type TableToolConfig struct {
+	Name        string
+	Description string
+	TableDesc   string
+	Operation   func(appInstance *app.App, schema, table string) (interface{}, error)
+	SuccessMsg  func(result interface{}, schema, table string) (string, []any)
+	ErrorMsg    string
+}
+
+// setupTableTool creates and registers a table-based tool using the provided configuration.
+func setupTableTool(s *server.MCPServer, appInstance *app.App, debugLogger *slog.Logger, config TableToolConfig) {
+	tool := mcp.NewTool(config.Name,
+		mcp.WithDescription(config.Description),
 		mcp.WithString("table",
 			mcp.Required(),
-			mcp.Description("Table name to describe"),
+			mcp.Description(config.TableDesc),
 		),
 		mcp.WithString("schema",
 			mcp.Description("Schema name (default: public)"),
 		),
 	)
 
-	s.AddTool(describeTableTool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	s.AddTool(tool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args := request.GetArguments()
-		debugLogger.Debug("Received describe_table tool request", "args", args)
+		debugLogger.Debug(fmt.Sprintf("Received %s tool request", config.Name), "args", args)
 
-		// Extract table name (required)
-		table, ok := args["table"].(string)
-		if !ok || table == "" {
-			debugLogger.Error("table name is missing or not a string", "value", args["table"])
-			return mcp.NewToolResultError("table must be a non-empty string"), nil
-		}
-
-		// Extract schema (optional)
-		schema := "public"
-		if schemaArg, ok := args["schema"].(string); ok && schemaArg != "" {
-			schema = schemaArg
-		}
-
-		debugLogger.Debug("Processing describe_table request", "schema", schema, "table", table)
-
-		// Describe table
-		columns, err := appInstance.DescribeTable(schema, table)
+		table, schema, err := handleTableSchemaToolRequest(args, debugLogger, config.Name)
 		if err != nil {
-			debugLogger.Error("Failed to describe table", "error", err, "schema", schema, "table", table)
-			return mcp.NewToolResultError(fmt.Sprintf("Failed to describe table: %v", err)), nil
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
-		// Convert to JSON
-		jsonData, err := json.Marshal(columns)
+		result, err := config.Operation(appInstance, schema, table)
 		if err != nil {
-			debugLogger.Error("Failed to marshal columns to JSON", "error", err)
-			return mcp.NewToolResultError("Failed to format table description response"), nil
+			debugLogger.Error("Failed to "+config.ErrorMsg, "error", err, "schema", schema, "table", table)
+			return mcp.NewToolResultError(fmt.Sprintf("Failed to %s: %v", config.ErrorMsg, err)), nil
 		}
 
-		debugLogger.Info("Successfully described table", "column_count", len(columns), "schema", schema, "table", table)
+		jsonData, err := marshalToJSON(result, debugLogger, fmt.Sprintf("Failed to format %s response", config.Name))
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+
+		msg, logArgs := config.SuccessMsg(result, schema, table)
+		debugLogger.Info(msg, logArgs...)
 		return mcp.NewToolResultText(string(jsonData)), nil
+	})
+}
+
+// setupDescribeTableTool creates and registers the describe_table tool.
+func setupDescribeTableTool(s *server.MCPServer, appInstance *app.App, debugLogger *slog.Logger) {
+	setupTableTool(s, appInstance, debugLogger, TableToolConfig{
+		Name:        "describe_table",
+		Description: "Get detailed information about a table's structure (columns, types, constraints)",
+		TableDesc:   "Table name to describe",
+		Operation: func(appInstance *app.App, schema, table string) (interface{}, error) {
+			return appInstance.DescribeTable(schema, table)
+		},
+		SuccessMsg: func(result interface{}, schema, table string) (string, []any) {
+			columns, ok := result.([]*app.ColumnInfo)
+			if !ok {
+				return "Error processing result", []any{"error", "type assertion failed"}
+			}
+			return "Successfully described table", []any{"column_count", len(columns), "schema", schema, "table", table}
+		},
+		ErrorMsg: "describe table",
 	})
 }
 
@@ -236,52 +287,21 @@ func setupExecuteQueryTool(s *server.MCPServer, appInstance *app.App, debugLogge
 
 // setupListIndexesTool creates and registers the list_indexes tool.
 func setupListIndexesTool(s *server.MCPServer, appInstance *app.App, debugLogger *slog.Logger) {
-	listIndexesTool := mcp.NewTool("list_indexes",
-		mcp.WithDescription("List indexes for a specific table"),
-		mcp.WithString("table",
-			mcp.Required(),
-			mcp.Description("Table name to list indexes for"),
-		),
-		mcp.WithString("schema",
-			mcp.Description("Schema name (default: public)"),
-		),
-	)
-
-	s.AddTool(listIndexesTool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		args := request.GetArguments()
-		debugLogger.Debug("Received list_indexes tool request", "args", args)
-
-		// Extract table name (required)
-		table, ok := args["table"].(string)
-		if !ok || table == "" {
-			debugLogger.Error("table name is missing or not a string", "value", args["table"])
-			return mcp.NewToolResultError("table must be a non-empty string"), nil
-		}
-
-		// Extract schema (optional)
-		schema := "public"
-		if schemaArg, ok := args["schema"].(string); ok && schemaArg != "" {
-			schema = schemaArg
-		}
-
-		debugLogger.Debug("Processing list_indexes request", "schema", schema, "table", table)
-
-		// List indexes
-		indexes, err := appInstance.ListIndexes(schema, table)
-		if err != nil {
-			debugLogger.Error("Failed to list indexes", "error", err, "schema", schema, "table", table)
-			return mcp.NewToolResultError(fmt.Sprintf("Failed to list indexes: %v", err)), nil
-		}
-
-		// Convert to JSON
-		jsonData, err := json.Marshal(indexes)
-		if err != nil {
-			debugLogger.Error("Failed to marshal indexes to JSON", "error", err)
-			return mcp.NewToolResultError("Failed to format indexes response"), nil
-		}
-
-		debugLogger.Info("Successfully listed indexes", "count", len(indexes), "schema", schema, "table", table)
-		return mcp.NewToolResultText(string(jsonData)), nil
+	setupTableTool(s, appInstance, debugLogger, TableToolConfig{
+		Name:        "list_indexes",
+		Description: "List indexes for a specific table",
+		TableDesc:   "Table name to list indexes for",
+		Operation: func(appInstance *app.App, schema, table string) (interface{}, error) {
+			return appInstance.ListIndexes(schema, table)
+		},
+		SuccessMsg: func(result interface{}, schema, table string) (string, []any) {
+			indexes, ok := result.([]*app.IndexInfo)
+			if !ok {
+				return "Error processing result", []any{"error", "type assertion failed"}
+			}
+			return "Successfully listed indexes", []any{"count", len(indexes), "schema", schema, "table", table}
+		},
+		ErrorMsg: "list indexes",
 	})
 }
 
@@ -500,6 +520,6 @@ func main() {
 	// Start the stdio server
 	if err := server.ServeStdio(s); err != nil {
 		fmt.Fprintf(os.Stderr, "Server error: %v\n", err)
-		os.Exit(1)
+		return
 	}
 }

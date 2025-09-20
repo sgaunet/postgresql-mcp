@@ -292,7 +292,7 @@ func TestApp_ListTablesWithDefaultSchema(t *testing.T) {
 	opts := &ListTablesOptions{}
 
 	mockClient.On("Ping").Return(nil)
-	mockClient.On("ListTables", defaultSchema).Return(expectedTables, nil)
+	mockClient.On("ListTables", DefaultSchema).Return(expectedTables, nil)
 
 	tables, err := app.ListTables(opts)
 	assert.NoError(t, err)
@@ -310,7 +310,7 @@ func TestApp_ListTablesWithNilOptions(t *testing.T) {
 	}
 
 	mockClient.On("Ping").Return(nil)
-	mockClient.On("ListTables", defaultSchema).Return(expectedTables, nil)
+	mockClient.On("ListTables", DefaultSchema).Return(expectedTables, nil)
 
 	tables, err := app.ListTables(nil)
 	assert.NoError(t, err)
@@ -389,7 +389,7 @@ func TestApp_DescribeTableDefaultSchema(t *testing.T) {
 	}
 
 	mockClient.On("Ping").Return(nil)
-	mockClient.On("DescribeTable", defaultSchema, "users").Return(expectedColumns, nil)
+	mockClient.On("DescribeTable", DefaultSchema, "users").Return(expectedColumns, nil)
 
 	columns, err := app.DescribeTable("", "users")
 	assert.NoError(t, err)
