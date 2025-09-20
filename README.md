@@ -17,7 +17,8 @@ A Model Context Protocol (MCP) server that provides PostgreSQL integration tools
 
 ## Prerequisites
 
-- Go 1.21 or later
+- Go 1.25 or later
+- Docker (required for running integration tests)
 - Access to PostgreSQL databases
 
 ## Installation
@@ -225,13 +226,28 @@ go build -o postgresql-mcp
 ```
 
 ### Testing
+
+#### Unit Tests
 ```bash
-go test ./...
+# Run unit tests only (no Docker required)
+SKIP_INTEGRATION_TESTS=true go test ./...
 ```
+
+#### Integration Tests
+```bash
+# Run all tests including integration tests (requires Docker)
+go test ./...
+
+# Run only integration tests
+go test -run "TestIntegration" ./...
+```
+
+**Note:** Integration tests use [testcontainers](https://golang.testcontainers.org/) to automatically spin up PostgreSQL instances in Docker containers. This ensures tests are isolated, reproducible, and don't require manual PostgreSQL setup.
 
 ### Dependencies
 - [mcp-go](https://github.com/mark3labs/mcp-go) - MCP protocol implementation
 - [lib/pq](https://github.com/lib/pq) - PostgreSQL driver
+- [testcontainers-go](https://github.com/testcontainers/testcontainers-go) - Integration testing with Docker containers
 
 ## Troubleshooting
 
