@@ -46,3 +46,13 @@ tasks:
     desc: "Run security scan (requires gosec)"
     cmds:
       - gosec ./...
+
+  snapshot:
+    desc: "Create a snapshot release"
+    cmds:
+      - GITLAB_TOKEN="" goreleaser --clean --snapshot
+
+  release:
+    desc: "Create a release"
+    cmds:
+      - GITLAB_TOKEN="" goreleaser --clean
