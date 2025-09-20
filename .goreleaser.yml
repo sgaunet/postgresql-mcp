@@ -1,0 +1,158 @@
+version: 2
+project_name: postgresql-mcp
+before:
+  hooks:
+    - go mod download
+builds:
+  - env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -X main.version={{.Version}}
+    goos:
+      - linux
+      - windows
+      - darwin
+    goarch:
+      - amd64
+      - arm
+      - arm64
+    goarm:
+      - "6"
+      - "7"
+    ignore:
+      - goos: darwin
+        goarch: "386"
+      - goos: windows
+        goarch: arm
+        goarm: "7"
+      - goos: windows
+        goarch: arm
+        goarm: "6"
+      - goos: windows
+        goarch: arm64
+
+archives:
+  - name_template: '{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}'
+    format: tar.gz
+    format_overrides:
+      - goos: windows
+        format: zip
+  - id: binary
+    name_template: '{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}'
+    formats: ['binary']
+
+release:
+  # Handle existing releases gracefully
+  replace_existing_draft: true
+  mode: replace
+  draft: false
+  prerelease: auto
+
+checksum:
+  # https://goreleaser.com/customization/checksum/
+  name_template: 'checksums.txt'
+
+# dockers:
+#   # https://goreleaser.com/customization/docker/
+#   - use: buildx
+#     goos: linux
+#     goarch: amd64
+#     image_templates:
+#       - "ghcr.io/sgaunet/{{ .ProjectName }}:{{ .Version }}-amd64"
+#       - "ghcr.io/sgaunet/{{ .ProjectName }}:latest-amd64"
+#     build_flag_templates:
+#       - "--platform=linux/amd64"
+#       - "--label=org.opencontainers.image.created={{.Date}}"
+#       - "--label=org.opencontainers.image.title={{.ProjectName}}"
+#       - "--label=org.opencontainers.image.revision={{.FullCommit}}"
+#       - "--label=org.opencontainers.image.version={{.Version}}"
+#     extra_files:
+#     - resources
+
+#   - use: buildx
+#     goos: linux
+#     goarch: arm64
+#     image_templates:
+#       - "ghcr.io/sgaunet/{{ .ProjectName }}:{{ .Version }}-arm64v8"
+#       - "ghcr.io/sgaunet/{{ .ProjectName }}:latest-arm64v8"
+#     build_flag_templates:
+#       - "--platform=linux/arm64/v8"
+#       - "--label=org.opencontainers.image.created={{.Date}}"
+#       - "--label=org.opencontainers.image.title={{.ProjectName}}"
+#       - "--label=org.opencontainers.image.revision={{.FullCommit}}"
+#       - "--label=org.opencontainers.image.version={{.Version}}"
+#     extra_files:
+#     - resources
+
+#   - use: buildx
+#     goos: linux
+#     goarch: arm
+#     goarm: "6"
+#     image_templates:
+#       - "ghcr.io/sgaunet/{{ .ProjectName }}:{{ .Version }}-armv6"
+#       - "ghcr.io/sgaunet/{{ .ProjectName }}:latest-armv6"
+#     build_flag_templates:
+#       - "--platform=linux/arm/v6"
+#       - "--label=org.opencontainers.image.created={{.Date}}"
+#       - "--label=org.opencontainers.image.title={{.ProjectName}}"
+#       - "--label=org.opencontainers.image.revision={{.FullCommit}}"
+#       - "--label=org.opencontainers.image.version={{.Version}}"
+#     extra_files:
+#     - resources
+
+#   - use: buildx
+#     goos: linux
+#     goarch: arm
+#     goarm: "7"
+#     image_templates:
+#       - "ghcr.io/sgaunet/{{ .ProjectName }}:{{ .Version }}-armv7"
+#       - "ghcr.io/sgaunet/{{ .ProjectName }}:latest-armv7"
+#     build_flag_templates:
+#       - "--platform=linux/arm/v7"
+#       - "--label=org.opencontainers.image.created={{.Date}}"
+#       - "--label=org.opencontainers.image.title={{.ProjectName}}"
+#       - "--label=org.opencontainers.image.revision={{.FullCommit}}"
+#       - "--label=org.opencontainers.image.version={{.Version}}"
+#     extra_files:
+#     - resources
+
+# docker_manifests:
+#   # https://goreleaser.com/customization/docker_manifest/
+#   - name_template: ghcr.io/sgaunet/{{ .ProjectName }}:{{ .Version }}
+#     image_templates:
+#       - ghcr.io/sgaunet/{{ .ProjectName }}:{{ .Version }}-amd64
+#       - ghcr.io/sgaunet/{{ .ProjectName }}:{{ .Version }}-arm64v8
+#       - ghcr.io/sgaunet/{{ .ProjectName }}:{{ .Version }}-armv6
+#       - ghcr.io/sgaunet/{{ .ProjectName }}:{{ .Version }}-armv7
+#   - name_template: ghcr.io/sgaunet/{{ .ProjectName }}:latest
+#     image_templates:
+#       - ghcr.io/sgaunet/{{ .ProjectName }}:latest-amd64
+#       - ghcr.io/sgaunet/{{ .ProjectName }}:latest-arm64v8
+#       - ghcr.io/sgaunet/{{ .ProjectName }}:latest-armv6
+#       - ghcr.io/sgaunet/{{ .ProjectName }}:latest-armv7
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+
+brews:
+  - ids: [default]  # Use the default archive (tar.gz/zip), not binary
+    homepage: 'https://github.com/sgaunet/postgresql-mcp'
+    description: 'A Model Context Protocol (MCP) server that provides Postgresql integration tools for MCP clients.'
+    directory: Formula
+    commit_author:
+      name: sgaunet
+      email: 1552102+sgaunet@users.noreply.github.com
+    repository:
+      owner: sgaunet
+      name: homebrew-tools
+      # Token with 'repo' scope is required for pushing to a different repository
+      token: '{{ .Env.HOMEBREW_TAP_TOKEN }}'
+    url_template: 'https://github.com/sgaunet/postgresql-mcp/releases/download/{{ .Tag }}/{{ .ArtifactName }}'
+    install: |
+      bin.install "postgresql-mcp"
+    test: |
+      system "#{bin}/postgresql-mcp", "-h"

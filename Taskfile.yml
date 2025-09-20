@@ -1,0 +1,53 @@
+# https://taskfile.dev
+version: '3'
+vars:
+  BINFILE: postgresql-mcp
+
+tasks:
+  default:
+    desc: "List all tasks"
+    cmds:
+      - task -a
+
+  build:
+    desc: "Build the binary"
+    cmds:
+      - go build -o {{.BINFILE}} .
+
+  test:
+    desc: "Run all tests"
+    cmds:
+      - go test -v ./...
+
+  coverage:
+    desc: "Run tests with coverage report in terminal"
+    cmds:
+      - go test -v -coverprofile=coverage.out ./...
+      - go tool cover -func=coverage.out
+
+  test-unit:
+    desc: "Run unit tests only (exclude integration tests)"
+    env:
+      SKIP_INTEGRATION_TESTS: true
+    cmds:
+      - go test -v ./...
+
+  test-integration:
+    desc: "Run integration tests only"
+    cmds:
+      - go test -v -run "TestIntegration" ./...
+
+  linter:
+    desc: "Run linter"
+    cmds:
+      - golangci-lint run
+
+  snapshot:
+    desc: "Create a snapshot release"
+    cmds:
+      - GITLAB_TOKEN="" goreleaser --clean --snapshot
+
+  release:
+    desc: "Create a release"
+    cmds:
+      - GITLAB_TOKEN="" goreleaser --clean
