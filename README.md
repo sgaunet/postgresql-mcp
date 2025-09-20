@@ -4,7 +4,6 @@ A Model Context Protocol (MCP) server that provides PostgreSQL integration tools
 
 ## Features
 
-- **Connect Database**: Connect to PostgreSQL databases using connection strings or individual parameters
 - **List Databases**: List all databases on the PostgreSQL server
 - **List Schemas**: List all schemas in the current database
 - **List Tables**: List tables in a specific schema with optional metadata (size, row count)
@@ -43,49 +42,23 @@ A Model Context Protocol (MCP) server that provides PostgreSQL integration tools
 
 ## Configuration
 
-The PostgreSQL MCP server can be configured using environment variables or connection parameters passed to the `connect_database` tool.
+The PostgreSQL MCP server requires database connection information to be provided via environment variables.
 
 ### Environment Variables
 
-- `POSTGRES_URL`: PostgreSQL connection URL (format: `postgres://user:password@host:port/dbname?sslmode=prefer`)
-- `DATABASE_URL`: Alternative to `POSTGRES_URL`
+- `POSTGRES_URL` (required): PostgreSQL connection URL (format: `postgres://user:password@host:port/dbname?sslmode=prefer`)
+- `DATABASE_URL` (alternative): Alternative to `POSTGRES_URL` if `POSTGRES_URL` is not set
 
-### Connection Parameters
+**Example:**
+```bash
+export POSTGRES_URL="postgres://user:password@localhost:5432/mydb?sslmode=prefer"
+# or
+export DATABASE_URL="postgres://user:password@localhost:5432/mydb?sslmode=prefer"
+```
 
-When using the `connect_database` tool, you can provide either:
-
-1. **Connection String:**
-   ```json
-   {
-     "connection_string": "postgres://user:password@localhost:5432/mydb?sslmode=prefer"
-   }
-   ```
-
-2. **Individual Parameters:**
-   ```json
-   {
-     "host": "localhost",
-     "port": 5432,
-     "database": "mydb",
-     "username": "user",
-     "password": "password",
-     "ssl_mode": "prefer"
-   }
-   ```
+**Note:** The server will attempt to connect to the database on startup. If the connection fails, it will log a warning and retry when the first tool is requested.
 
 ## Available Tools
-
-### `connect_database`
-Connect to a PostgreSQL database using connection parameters.
-
-**Parameters:**
-- `connection_string` (string, optional): Complete PostgreSQL connection URL
-- `host` (string, optional): Database host (default: localhost)
-- `port` (number, optional): Database port (default: 5432)
-- `database` (string, optional): Database name
-- `username` (string, optional): Database username
-- `password` (string, optional): Database password
-- `ssl_mode` (string, optional): SSL mode: disable, require, verify-ca, verify-full (default: prefer)
 
 ### `list_databases`
 List all databases on the PostgreSQL server.
@@ -165,30 +138,19 @@ This MCP server is designed with security as a priority:
 
 1. **Configure the MCP server in your Claude Code settings.**
 
-2. **Use the tools in your conversations:**
+2. **Set up your database connection via environment variables:**
+   ```bash
+   export POSTGRES_URL="postgres://user:pass@localhost:5432/mydb"
    ```
-   Connect to database: postgres://user:pass@localhost:5432/mydb
+
+3. **Use the tools in your conversations:**
+   ```
    List all tables in the public schema
    Describe the users table
    Execute query: SELECT * FROM users LIMIT 10
    ```
 
 ## Examples
-
-### Connecting to a Database
-```json
-{
-  "tool": "connect_database",
-  "parameters": {
-    "host": "localhost",
-    "port": 5432,
-    "database": "myapp",
-    "username": "myuser",
-    "password": "mypassword",
-    "ssl_mode": "prefer"
-  }
-}
-```
 
 ### Listing Tables with Metadata
 ```json
@@ -275,8 +237,9 @@ go test ./...
 
 ### Connection Issues
 - Verify PostgreSQL is running and accessible
-- Check connection parameters (host, port, database, credentials)
-- Ensure SSL mode is appropriate for your setup
+- Check the `POSTGRES_URL` or `DATABASE_URL` environment variable is correctly set
+- Ensure the connection string format is correct: `postgres://user:password@host:port/dbname?sslmode=prefer`
+- Verify database credentials and permissions
 - Check firewall and network connectivity
 
 ### Permission Issues

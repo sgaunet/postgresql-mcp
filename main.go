@@ -24,99 +24,6 @@ var (
 	ErrInvalidConnectionParameters = errors.New("invalid connection parameters")
 )
 
-// setupConnectDatabaseTool creates and registers the connect_database tool.
-func setupConnectDatabaseTool(s *server.MCPServer, appInstance *app.App, debugLogger *slog.Logger) {
-	connectTool := mcp.NewTool("connect_database",
-		mcp.WithDescription("Connect to a PostgreSQL database using connection parameters"),
-		mcp.WithString("connection_string",
-			mcp.Description("PostgreSQL connection string (e.g., 'postgres://user:password@host:port/dbname?sslmode=prefer')"),
-		),
-		mcp.WithString("host",
-			mcp.Description("Database host (default: localhost)"),
-		),
-		mcp.WithNumber("port",
-			mcp.Description("Database port (default: 5432)"),
-		),
-		mcp.WithString("database",
-			mcp.Description("Database name"),
-		),
-		mcp.WithString("username",
-			mcp.Description("Database username"),
-		),
-		mcp.WithString("password",
-			mcp.Description("Database password"),
-		),
-		mcp.WithString("ssl_mode",
-			mcp.Description("SSL mode: disable, require, verify-ca, verify-full (default: prefer)"),
-		),
-	)
-
-	s.AddTool(connectTool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		args := request.GetArguments()
-		debugLogger.Debug("Received connect_database tool request", "args", args)
-
-		// Extract connection parameters
-		opts := &app.ConnectOptions{}
-
-		if connectionString, ok := args["connection_string"].(string); ok && connectionString != "" {
-			opts.ConnectionString = connectionString
-		}
-
-		if host, ok := args["host"].(string); ok && host != "" {
-			opts.Host = host
-		}
-
-		if portFloat, ok := args["port"].(float64); ok {
-			opts.Port = int(portFloat)
-		}
-
-		if database, ok := args["database"].(string); ok && database != "" {
-			opts.Database = database
-		}
-
-		if username, ok := args["username"].(string); ok && username != "" {
-			opts.Username = username
-		}
-
-		if password, ok := args["password"].(string); ok && password != "" {
-			opts.Password = password
-		}
-
-		if sslMode, ok := args["ssl_mode"].(string); ok && sslMode != "" {
-			opts.SSLMode = sslMode
-		}
-
-		debugLogger.Debug("Processing connect_database request", "host", opts.Host, "database", opts.Database)
-
-		// Attempt to connect
-		if err := appInstance.Connect(opts); err != nil {
-			debugLogger.Error("Failed to connect to database", "error", err)
-			return mcp.NewToolResultError(fmt.Sprintf("Failed to connect to database: %v", err)), nil
-		}
-
-		// Get current database name for confirmation
-		currentDB, err := appInstance.GetCurrentDatabase()
-		if err != nil {
-			debugLogger.Warn("Connected but failed to get current database name", "error", err)
-			currentDB = "unknown"
-		}
-
-		response := map[string]interface{}{
-			"status":   "connected",
-			"database": currentDB,
-			"message":  "Successfully connected to PostgreSQL database",
-		}
-
-		jsonData, err := json.Marshal(response)
-		if err != nil {
-			debugLogger.Error("Failed to marshal connection response", "error", err)
-			return mcp.NewToolResultError("Failed to format connection response"), nil
-		}
-
-		debugLogger.Info("Successfully connected to database", "database", currentDB)
-		return mcp.NewToolResultText(string(jsonData)), nil
-	})
-}
 
 // setupListDatabasesTool creates and registers the list_databases tool.
 func setupListDatabasesTool(s *server.MCPServer, appInstance *app.App, debugLogger *slog.Logger) {
@@ -490,7 +397,6 @@ ENVIRONMENT VARIABLES:
 DESCRIPTION:
     This MCP server provides the following tools for PostgreSQL integration:
 
-    • connect_database    - Connect to a PostgreSQL database
     • list_databases      - List all databases on the server
     • list_schemas        - List schemas in the current database
     • list_tables         - List tables in a schema with optional metadata
@@ -560,7 +466,6 @@ func initializeApp() (*app.App, *slog.Logger) {
 
 // registerAllTools registers all available tools with the MCP server.
 func registerAllTools(s *server.MCPServer, appInstance *app.App, debugLogger *slog.Logger) {
-	setupConnectDatabaseTool(s, appInstance, debugLogger)
 	setupListDatabasesTool(s, appInstance, debugLogger)
 	setupListSchemasTool(s, appInstance, debugLogger)
 	setupListTablesTool(s, appInstance, debugLogger)

@@ -4,8 +4,6 @@ import (
 	"errors"
 	"log/slog"
 	"os"
-	"strconv"
-	"strings"
 
 	"github.com/sylvain/postgresql-mcp/internal/logger"
 )
@@ -17,24 +15,13 @@ const (
 
 // Error variables for static errors.
 var (
-	ErrConnectionRequired      = errors.New("database connection is required")
-	ErrConnectionStringRequired = errors.New("POSTGRES_URL or connection parameters are required")
-	ErrSchemaRequired         = errors.New("schema name is required")
-	ErrTableRequired          = errors.New("table name is required")
-	ErrQueryRequired          = errors.New("query is required")
-	ErrInvalidQuery           = errors.New("only SELECT and WITH queries are allowed")
+	ErrConnectionRequired = errors.New("database connection failed. Please check POSTGRES_URL or DATABASE_URL environment variable")
+	ErrSchemaRequired     = errors.New("schema name is required")
+	ErrTableRequired      = errors.New("table name is required")
+	ErrQueryRequired      = errors.New("query is required")
+	ErrInvalidQuery       = errors.New("only SELECT and WITH queries are allowed")
 )
 
-// ConnectOptions represents database connection options.
-type ConnectOptions struct {
-	ConnectionString string `json:"connection_string,omitempty"`
-	Host             string `json:"host,omitempty"`
-	Port             int    `json:"port,omitempty"`
-	Database         string `json:"database,omitempty"`
-	Username         string `json:"username,omitempty"`
-	Password         string `json:"password,omitempty"`
-	SSLMode          string `json:"ssl_mode,omitempty"`
-}
 
 // ListTablesOptions represents options for listing tables.
 type ListTablesOptions struct {
@@ -55,12 +42,19 @@ type App struct {
 	logger *slog.Logger
 }
 
-// New creates a new App instance.
+// New creates a new App instance and attempts to connect to the database.
 func New() (*App, error) {
-	return &App{
+	app := &App{
 		client: NewPostgreSQLClient(),
 		logger: logger.NewLogger("info"),
-	}, nil
+	}
+
+	// Attempt initial connection
+	if err := app.tryConnect(); err != nil {
+		app.logger.Warn("Could not connect to database on startup, will retry on first tool request", "error", err)
+	}
+
+	return app, nil
 }
 
 // SetLogger sets the logger for the app.
@@ -68,29 +62,16 @@ func (a *App) SetLogger(logger *slog.Logger) {
 	a.logger = logger
 }
 
-// Connect establishes a connection to the PostgreSQL database.
-func (a *App) Connect(opts *ConnectOptions) error {
-	if opts == nil {
-		return ErrConnectionStringRequired
-	}
-
-	connectionString := opts.ConnectionString
-
-	// If no connection string provided, try to build one from individual parameters
+// tryConnect attempts to connect to the database using environment variables.
+func (a *App) tryConnect() error {
+	// Try environment variables
+	connectionString := os.Getenv("POSTGRES_URL")
 	if connectionString == "" {
-		connectionString = a.buildConnectionString(opts)
-	}
-
-	// If still no connection string, try environment variables
-	if connectionString == "" {
-		connectionString = os.Getenv("POSTGRES_URL")
-		if connectionString == "" {
-			connectionString = os.Getenv("DATABASE_URL")
-		}
+		connectionString = os.Getenv("DATABASE_URL")
 	}
 
 	if connectionString == "" {
-		return ErrConnectionStringRequired
+		return errors.New("no database connection string found in POSTGRES_URL or DATABASE_URL environment variables")
 	}
 
 	a.logger.Debug("Connecting to PostgreSQL database")
@@ -104,40 +85,6 @@ func (a *App) Connect(opts *ConnectOptions) error {
 	return nil
 }
 
-// buildConnectionString builds a connection string from individual parameters.
-func (a *App) buildConnectionString(opts *ConnectOptions) string {
-	if opts.Host == "" {
-		return ""
-	}
-
-	var parts []string
-
-	parts = append(parts, "host="+opts.Host)
-
-	if opts.Port > 0 {
-		parts = append(parts, "port="+strconv.Itoa(opts.Port))
-	}
-
-	if opts.Database != "" {
-		parts = append(parts, "dbname="+opts.Database)
-	}
-
-	if opts.Username != "" {
-		parts = append(parts, "user="+opts.Username)
-	}
-
-	if opts.Password != "" {
-		parts = append(parts, "password="+opts.Password)
-	}
-
-	if opts.SSLMode != "" {
-		parts = append(parts, "sslmode="+opts.SSLMode)
-	} else {
-		parts = append(parts, "sslmode=prefer")
-	}
-
-	return strings.Join(parts, " ")
-}
 
 // Disconnect closes the database connection.
 func (a *App) Disconnect() error {
@@ -147,17 +94,36 @@ func (a *App) Disconnect() error {
 	return nil
 }
 
-// ValidateConnection checks if the database connection is valid.
-func (a *App) ValidateConnection() error {
+// ensureConnection checks if the database connection is valid and attempts to reconnect if needed.
+func (a *App) ensureConnection() error {
 	if a.client == nil {
 		return ErrConnectionRequired
 	}
-	return a.client.Ping()
+
+	// Test current connection
+	if err := a.client.Ping(); err != nil {
+		a.logger.Debug("Database connection lost, attempting to reconnect", "error", err)
+
+		// Attempt to reconnect
+		if reconnectErr := a.tryConnect(); reconnectErr != nil {
+			a.logger.Error("Failed to reconnect to database", "ping_error", err, "reconnect_error", reconnectErr)
+			return ErrConnectionRequired
+		}
+
+		a.logger.Info("Successfully reconnected to database")
+	}
+
+	return nil
+}
+
+// ValidateConnection checks if the database connection is valid (for backward compatibility).
+func (a *App) ValidateConnection() error {
+	return a.ensureConnection()
 }
 
 // ListDatabases returns a list of all databases.
 func (a *App) ListDatabases() ([]*DatabaseInfo, error) {
-	if err := a.ValidateConnection(); err != nil {
+	if err := a.ensureConnection(); err != nil {
 		return nil, err
 	}
 
@@ -175,7 +141,7 @@ func (a *App) ListDatabases() ([]*DatabaseInfo, error) {
 
 // GetCurrentDatabase returns the name of the current database.
 func (a *App) GetCurrentDatabase() (string, error) {
-	if err := a.ValidateConnection(); err != nil {
+	if err := a.ensureConnection(); err != nil {
 		return "", err
 	}
 
@@ -184,7 +150,7 @@ func (a *App) GetCurrentDatabase() (string, error) {
 
 // ListSchemas returns a list of schemas in the current database.
 func (a *App) ListSchemas() ([]*SchemaInfo, error) {
-	if err := a.ValidateConnection(); err != nil {
+	if err := a.ensureConnection(); err != nil {
 		return nil, err
 	}
 
@@ -202,7 +168,7 @@ func (a *App) ListSchemas() ([]*SchemaInfo, error) {
 
 // ListTables returns a list of tables in the specified schema.
 func (a *App) ListTables(opts *ListTablesOptions) ([]*TableInfo, error) {
-	if err := a.ValidateConnection(); err != nil {
+	if err := a.ensureConnection(); err != nil {
 		return nil, err
 	}
 
@@ -238,7 +204,7 @@ func (a *App) ListTables(opts *ListTablesOptions) ([]*TableInfo, error) {
 
 // DescribeTable returns detailed information about a table's structure.
 func (a *App) DescribeTable(schema, table string) ([]*ColumnInfo, error) {
-	if err := a.ValidateConnection(); err != nil {
+	if err := a.ensureConnection(); err != nil {
 		return nil, err
 	}
 
@@ -264,7 +230,7 @@ func (a *App) DescribeTable(schema, table string) ([]*ColumnInfo, error) {
 
 // GetTableStats returns statistics for a specific table.
 func (a *App) GetTableStats(schema, table string) (*TableInfo, error) {
-	if err := a.ValidateConnection(); err != nil {
+	if err := a.ensureConnection(); err != nil {
 		return nil, err
 	}
 
@@ -290,7 +256,7 @@ func (a *App) GetTableStats(schema, table string) (*TableInfo, error) {
 
 // ListIndexes returns a list of indexes for the specified table.
 func (a *App) ListIndexes(schema, table string) ([]*IndexInfo, error) {
-	if err := a.ValidateConnection(); err != nil {
+	if err := a.ensureConnection(); err != nil {
 		return nil, err
 	}
 
@@ -316,7 +282,7 @@ func (a *App) ListIndexes(schema, table string) ([]*IndexInfo, error) {
 
 // ExecuteQuery executes a read-only query and returns the results.
 func (a *App) ExecuteQuery(opts *ExecuteQueryOptions) (*QueryResult, error) {
-	if err := a.ValidateConnection(); err != nil {
+	if err := a.ensureConnection(); err != nil {
 		return nil, err
 	}
 
@@ -344,7 +310,7 @@ func (a *App) ExecuteQuery(opts *ExecuteQueryOptions) (*QueryResult, error) {
 
 // ExplainQuery returns the execution plan for a query.
 func (a *App) ExplainQuery(query string, args ...interface{}) (*QueryResult, error) {
-	if err := a.ValidateConnection(); err != nil {
+	if err := a.ensureConnection(); err != nil {
 		return nil, err
 	}
 
