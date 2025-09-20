@@ -23,22 +23,56 @@ A Model Context Protocol (MCP) server that provides PostgreSQL integration tools
 
 ## Installation
 
-### Build from Source
+### Option 1: Install with Homebrew (Recommended for macOS/Linux)
+
+```bash
+# Add the tap and install
+brew tap sgaunet/homebrew-tools
+brew install sgaunet/tools/postgresql-mcp
+```
+
+### Option 2: Download from GitHub Releases
+
+1. **Download the latest release:**
+
+   Visit the [releases page](https://github.com/sgaunet/postgresql-mcp/releases/latest) and download the appropriate binary for your platform:
+
+   - **macOS**: `postgresql-mcp_VERSION_darwin_amd64` (Intel) or `postgresql-mcp_VERSION_darwin_arm64` (Apple Silicon)
+   - **Linux**: `postgresql-mcp_VERSION_linux_amd64` (x86_64) or `postgresql-mcp_VERSION_linux_arm64` (ARM64)
+   - **Windows**: `postgresql-mcp_VERSION_windows_amd64.exe`
+
+2. **Make it executable (macOS/Linux):**
+   ```bash
+   chmod +x postgresql-mcp_*
+   ```
+
+3. **Move to a location in your PATH:**
+   ```bash
+   # Example for macOS/Linux
+   sudo mv postgresql-mcp_* /usr/local/bin/postgresql-mcp
+   ```
+
+### Option 3: Build from Source
 
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/sylvain/postgresql-mcp.git
+   git clone https://github.com/sgaunet/postgresql-mcp.git
    cd postgresql-mcp
    ```
 
-2. **Build the server:**
+2. **Build the project:**
+   ```bash
+   task build
+   ```
+
+   Or manually:
    ```bash
    go build -o postgresql-mcp
    ```
 
-3. **Test the installation:**
+3. **Install to your PATH:**
    ```bash
-   ./postgresql-mcp -v
+   sudo mv postgresql-mcp /usr/local/bin/
    ```
 
 ## Installation for a project
