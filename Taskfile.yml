@@ -42,11 +42,6 @@ tasks:
     cmds:
       - golangci-lint run
 
-  security:
-    desc: "Run security scan (requires gosec)"
-    cmds:
-      - gosec ./...
-
   snapshot:
     desc: "Create a snapshot release"
     cmds:
