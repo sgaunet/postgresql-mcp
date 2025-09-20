@@ -346,7 +346,7 @@ func TestIntegration_App_ExecuteQuery(t *testing.T) {
 	// Check first row data
 	firstRow := result.Rows[0]
 	assert.Len(t, firstRow, 3)
-	assert.Equal(t, "1", fmt.Sprintf("%.0f", firstRow[0])) // ID as float64 from JSON
+	assert.Equal(t, "1", fmt.Sprintf("%v", firstRow[0])) // ID can be int64 or other numeric type
 	assert.Equal(t, "John Doe", firstRow[1])
 	assert.Equal(t, "john@example.com", firstRow[2])
 }
@@ -421,8 +421,8 @@ func TestIntegration_App_ExplainQuery(t *testing.T) {
 
 	// Test EXPLAIN query
 	result, err := appInstance.ExplainQuery("SELECT * FROM test_mcp_schema.test_users WHERE active = true")
-	assert.NoError(t, err)
-	assert.NotNil(t, result)
+	require.NoError(t, err)
+	require.NotNil(t, result)
 
 	// EXPLAIN should return execution plan
 	assert.NotEmpty(t, result.Columns)

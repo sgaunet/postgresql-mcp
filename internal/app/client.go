@@ -213,7 +213,16 @@ func (c *PostgreSQLClientImpl) DescribeTable(schema, table string) ([]*ColumnInf
 		columns = append(columns, &column)
 	}
 
-	return columns, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Check if table exists (if no columns found, table doesn't exist)
+	if len(columns) == 0 {
+		return nil, fmt.Errorf("table %s.%s does not exist", schema, table)
+	}
+
+	return columns, nil
 }
 
 // GetTableStats returns statistics for a specific table.
@@ -232,7 +241,7 @@ func (c *PostgreSQLClientImpl) GetTableStats(schema, table string) (*TableInfo, 
 		Name:   table,
 	}
 
-	// Get row count (approximate for large tables)
+	// Get row count (approximate for large tables, exact for small tables)
 	countQuery := `
 		SELECT COALESCE(n_tup_ins - n_tup_del, 0) as estimated_rows
 		FROM pg_stat_user_tables
@@ -244,7 +253,17 @@ func (c *PostgreSQLClientImpl) GetTableStats(schema, table string) (*TableInfo, 
 		return nil, fmt.Errorf("failed to get table stats: %w", err)
 	}
 
-	if rowCount.Valid {
+	// If statistics are not available or show 0 rows, fall back to actual count
+	// This is useful for newly created tables where pg_stat hasn't been updated
+	if !rowCount.Valid || rowCount.Int64 == 0 {
+		actualCountQuery := fmt.Sprintf(`SELECT COUNT(*) FROM "%s"."%s"`, schema, table)
+		var actualCount int64
+		err := c.db.QueryRow(actualCountQuery).Scan(&actualCount)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get actual row count: %w", err)
+		}
+		tableInfo.RowCount = actualCount
+	} else {
 		tableInfo.RowCount = rowCount.Int64
 	}
 
@@ -363,6 +382,52 @@ func (c *PostgreSQLClientImpl) ExplainQuery(query string, args ...interface{}) (
 		return nil, fmt.Errorf("no database connection")
 	}
 
+	// Validate that the input query is safe (SELECT or WITH only)
+	trimmedQuery := strings.TrimSpace(strings.ToUpper(query))
+	if !strings.HasPrefix(trimmedQuery, "SELECT") && !strings.HasPrefix(trimmedQuery, "WITH") {
+		return nil, fmt.Errorf("only SELECT and WITH queries are allowed")
+	}
+
+	// Construct the EXPLAIN query
 	explainQuery := "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " + query
-	return c.ExecuteQuery(explainQuery, args...)
+
+	// Execute the EXPLAIN query directly (bypassing ExecuteQuery validation)
+	rows, err := c.db.Query(explainQuery, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute explain query: %w", err)
+	}
+	defer rows.Close()
+
+	columns, err := rows.Columns()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get columns: %w", err)
+	}
+
+	var result [][]interface{}
+	for rows.Next() {
+		values := make([]interface{}, len(columns))
+		valuePtrs := make([]interface{}, len(columns))
+		for i := range values {
+			valuePtrs[i] = &values[i]
+		}
+
+		if err := rows.Scan(valuePtrs...); err != nil {
+			return nil, fmt.Errorf("failed to scan row: %w", err)
+		}
+
+		// Convert []byte to string for easier JSON serialization
+		for i, v := range values {
+			if b, ok := v.([]byte); ok {
+				values[i] = string(b)
+			}
+		}
+
+		result = append(result, values)
+	}
+
+	return &QueryResult{
+		Columns:  columns,
+		Rows:     result,
+		RowCount: len(result),
+	}, rows.Err()
 }
