@@ -37,7 +37,7 @@ tasks:
     cmds:
       - go test -v -run "TestIntegration" ./...
 
-  linter:
+  lint:
     desc: "Run linter"
     cmds:
       - golangci-lint run
