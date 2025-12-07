@@ -436,6 +436,100 @@ func TestIntegration_App_ListIndexes(t *testing.T) {
 	assert.True(t, foundEmailIdx, "Should find email index")
 }
 
+func TestIntegration_App_ListIndexes_SpecialCharacters(t *testing.T) {
+	_, connectionString, cleanup := setupTestContainer(t)
+	defer cleanup()
+
+	db, err := sql.Open("postgres", connectionString)
+	require.NoError(t, err)
+	defer db.Close()
+
+	ctx := context.Background()
+
+	// Create test schema
+	testSchema := "test_special_chars"
+	_, err = db.ExecContext(ctx, fmt.Sprintf("DROP SCHEMA IF EXISTS %s CASCADE", testSchema))
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, fmt.Sprintf("CREATE SCHEMA %s", testSchema))
+	require.NoError(t, err)
+
+	// Create table with columns containing special characters
+	_, err = db.ExecContext(ctx, fmt.Sprintf(`
+		CREATE TABLE %s.test_table (
+			id SERIAL PRIMARY KEY,
+			"Column Name" VARCHAR(255),
+			"col,with,commas" VARCHAR(255),
+			"col{value}" VARCHAR(255),
+			"col}data" VARCHAR(255),
+			normal_col VARCHAR(255)
+		)
+	`, testSchema))
+	require.NoError(t, err)
+
+	// Create indexes with special character column names
+	_, err = db.ExecContext(ctx, fmt.Sprintf(`
+		CREATE INDEX idx_quoted_name ON %s.test_table ("Column Name")
+	`, testSchema))
+	require.NoError(t, err)
+
+	_, err = db.ExecContext(ctx, fmt.Sprintf(`
+		CREATE INDEX idx_with_commas ON %s.test_table ("col,with,commas", normal_col)
+	`, testSchema))
+	require.NoError(t, err)
+
+	_, err = db.ExecContext(ctx, fmt.Sprintf(`
+		CREATE INDEX idx_braces ON %s.test_table ("col{value}", "col}data")
+	`, testSchema))
+	require.NoError(t, err)
+
+	// Test with app
+	appInstance, err := app.New()
+	require.NoError(t, err)
+	defer appInstance.Disconnect()
+
+	err = appInstance.Connect(connectionString)
+	require.NoError(t, err)
+
+	indexes, err := appInstance.ListIndexes(testSchema, "test_table")
+	assert.NoError(t, err)
+	assert.NotEmpty(t, indexes)
+
+	// Verify each index is parsed correctly
+	indexMap := make(map[string]*app.IndexInfo)
+	for _, idx := range indexes {
+		indexMap[idx.Name] = idx
+	}
+
+	// Check idx_quoted_name
+	if idx, ok := indexMap["idx_quoted_name"]; ok {
+		assert.Len(t, idx.Columns, 1, "idx_quoted_name should have 1 column")
+		assert.Equal(t, "Column Name", idx.Columns[0], "Column name should be 'Column Name'")
+	} else {
+		t.Error("idx_quoted_name not found")
+	}
+
+	// Check idx_with_commas - should have 2 columns, not split by commas inside quotes
+	if idx, ok := indexMap["idx_with_commas"]; ok {
+		assert.Len(t, idx.Columns, 2, "idx_with_commas should have exactly 2 columns")
+		assert.Contains(t, idx.Columns, "col,with,commas", "Should contain column with commas")
+		assert.Contains(t, idx.Columns, "normal_col", "Should contain normal_col")
+	} else {
+		t.Error("idx_with_commas not found")
+	}
+
+	// Check idx_braces
+	if idx, ok := indexMap["idx_braces"]; ok {
+		assert.Len(t, idx.Columns, 2, "idx_braces should have 2 columns")
+		assert.Contains(t, idx.Columns, "col{value}", "Should contain 'col{value}'")
+		assert.Contains(t, idx.Columns, "col}data", "Should contain 'col}data'")
+	} else {
+		t.Error("idx_braces not found")
+	}
+
+	// Cleanup
+	_, _ = db.ExecContext(ctx, fmt.Sprintf("DROP SCHEMA IF EXISTS %s CASCADE", testSchema))
+}
+
 func TestIntegration_App_ExplainQuery(t *testing.T) {
 	_, connectionString, cleanup := setupTestDatabase(t)
 	defer cleanup()

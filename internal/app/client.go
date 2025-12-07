@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	_ "github.com/lib/pq"
+	"github.com/lib/pq"
 )
 
 // PostgreSQLClientImpl implements the PostgreSQLClient interface.
@@ -325,19 +325,16 @@ func (c *PostgreSQLClientImpl) ListIndexes(schema, table string) ([]*IndexInfo, 
 	var indexes []*IndexInfo
 	for rows.Next() {
 		var index IndexInfo
-		var columnsStr string
+		var columns pq.StringArray
 		if err := rows.Scan(
-			&index.Name, &index.Table, &columnsStr,
+			&index.Name, &index.Table, &columns,
 			&index.IsUnique, &index.IsPrimary, &index.IndexType,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan index row: %w", err)
 		}
 
-		// Parse column array from PostgreSQL format
-		columnsStr = strings.Trim(columnsStr, "{}")
-		if columnsStr != "" {
-			index.Columns = strings.Split(columnsStr, ",")
-		}
+		// Convert pq.StringArray to []string
+		index.Columns = []string(columns)
 
 		indexes = append(indexes, &index)
 	}
