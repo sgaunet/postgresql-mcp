@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
@@ -53,14 +54,14 @@ func (a *App) SetLogger(logger *slog.Logger) {
 
 // Connect establishes a database connection with the provided connection string.
 // If a connection already exists, it will be closed before establishing a new one.
-func (a *App) Connect(connectionString string) error {
+func (a *App) Connect(ctx context.Context, connectionString string) error {
 	if connectionString == "" {
 		return ErrNoConnectionString
 	}
 
 	// Close existing connection if any
 	if a.client != nil {
-		if err := a.client.Ping(); err == nil {
+		if err := a.client.Ping(ctx); err == nil {
 			// Connection exists and is active, close it first
 			if closeErr := a.client.Close(); closeErr != nil {
 				a.logger.Warn("Failed to close existing connection", "error", closeErr)
@@ -70,7 +71,7 @@ func (a *App) Connect(connectionString string) error {
 
 	a.logger.Debug("Connecting to PostgreSQL database")
 
-	if err := a.client.Connect(connectionString); err != nil {
+	if err := a.client.Connect(ctx, connectionString); err != nil {
 		a.logger.Error("Failed to connect to database", "error", err)
 		return fmt.Errorf("failed to connect: %w", err)
 	}
@@ -90,14 +91,14 @@ func (a *App) Disconnect() error {
 }
 
 // ListDatabases returns a list of all databases.
-func (a *App) ListDatabases() ([]*DatabaseInfo, error) {
-	if err := a.ensureConnection(); err != nil {
+func (a *App) ListDatabases(ctx context.Context) ([]*DatabaseInfo, error) {
+	if err := a.ensureConnection(ctx); err != nil {
 		return nil, err
 	}
 
 	a.logger.Debug("Listing databases")
 
-	databases, err := a.client.ListDatabases()
+	databases, err := a.client.ListDatabases(ctx)
 	if err != nil {
 		a.logger.Error("Failed to list databases", "error", err)
 		return nil, fmt.Errorf("failed to list databases: %w", err)
@@ -108,14 +109,14 @@ func (a *App) ListDatabases() ([]*DatabaseInfo, error) {
 }
 
 // ListSchemas returns a list of schemas in the current database.
-func (a *App) ListSchemas() ([]*SchemaInfo, error) {
-	if err := a.ensureConnection(); err != nil {
+func (a *App) ListSchemas(ctx context.Context) ([]*SchemaInfo, error) {
+	if err := a.ensureConnection(ctx); err != nil {
 		return nil, err
 	}
 
 	a.logger.Debug("Listing schemas")
 
-	schemas, err := a.client.ListSchemas()
+	schemas, err := a.client.ListSchemas(ctx)
 	if err != nil {
 		a.logger.Error("Failed to list schemas", "error", err)
 		return nil, fmt.Errorf("failed to list schemas: %w", err)
@@ -126,8 +127,8 @@ func (a *App) ListSchemas() ([]*SchemaInfo, error) {
 }
 
 // ListTables returns a list of tables in the specified schema.
-func (a *App) ListTables(opts *ListTablesOptions) ([]*TableInfo, error) {
-	if err := a.ensureConnection(); err != nil {
+func (a *App) ListTables(ctx context.Context, opts *ListTablesOptions) ([]*TableInfo, error) {
+	if err := a.ensureConnection(ctx); err != nil {
 		return nil, err
 	}
 
@@ -143,13 +144,13 @@ func (a *App) ListTables(opts *ListTablesOptions) ([]*TableInfo, error) {
 
 	// Use optimized query when stats are requested to avoid N+1 query pattern
 	if opts != nil && opts.IncludeSize {
-		tables, err = a.client.ListTablesWithStats(schema)
+		tables, err = a.client.ListTablesWithStats(ctx, schema)
 		if err != nil {
 			a.logger.Error("Failed to list tables with stats", "error", err, "schema", schema)
 			return nil, fmt.Errorf("failed to list tables with stats: %w", err)
 		}
 	} else {
-		tables, err = a.client.ListTables(schema)
+		tables, err = a.client.ListTables(ctx, schema)
 		if err != nil {
 			a.logger.Error("Failed to list tables", "error", err, "schema", schema)
 			return nil, fmt.Errorf("failed to list tables: %w", err)
@@ -161,8 +162,8 @@ func (a *App) ListTables(opts *ListTablesOptions) ([]*TableInfo, error) {
 }
 
 // DescribeTable returns detailed information about a table's structure.
-func (a *App) DescribeTable(schema, table string) ([]*ColumnInfo, error) {
-	if err := a.ensureConnection(); err != nil {
+func (a *App) DescribeTable(ctx context.Context, schema, table string) ([]*ColumnInfo, error) {
+	if err := a.ensureConnection(ctx); err != nil {
 		return nil, err
 	}
 
@@ -176,7 +177,7 @@ func (a *App) DescribeTable(schema, table string) ([]*ColumnInfo, error) {
 
 	a.logger.Debug("Describing table", "schema", schema, "table", table)
 
-	columns, err := a.client.DescribeTable(schema, table)
+	columns, err := a.client.DescribeTable(ctx, schema, table)
 	if err != nil {
 		a.logger.Error("Failed to describe table", "error", err, "schema", schema, "table", table)
 		return nil, fmt.Errorf("failed to describe table: %w", err)
@@ -187,8 +188,8 @@ func (a *App) DescribeTable(schema, table string) ([]*ColumnInfo, error) {
 }
 
 // GetTableStats returns statistics for a specific table.
-func (a *App) GetTableStats(schema, table string) (*TableInfo, error) {
-	if err := a.ensureConnection(); err != nil {
+func (a *App) GetTableStats(ctx context.Context, schema, table string) (*TableInfo, error) {
+	if err := a.ensureConnection(ctx); err != nil {
 		return nil, err
 	}
 
@@ -202,7 +203,7 @@ func (a *App) GetTableStats(schema, table string) (*TableInfo, error) {
 
 	a.logger.Debug("Getting table stats", "schema", schema, "table", table)
 
-	stats, err := a.client.GetTableStats(schema, table)
+	stats, err := a.client.GetTableStats(ctx, schema, table)
 	if err != nil {
 		a.logger.Error("Failed to get table stats", "error", err, "schema", schema, "table", table)
 		return nil, fmt.Errorf("failed to get table stats: %w", err)
@@ -213,8 +214,8 @@ func (a *App) GetTableStats(schema, table string) (*TableInfo, error) {
 }
 
 // ListIndexes returns a list of indexes for the specified table.
-func (a *App) ListIndexes(schema, table string) ([]*IndexInfo, error) {
-	if err := a.ensureConnection(); err != nil {
+func (a *App) ListIndexes(ctx context.Context, schema, table string) ([]*IndexInfo, error) {
+	if err := a.ensureConnection(ctx); err != nil {
 		return nil, err
 	}
 
@@ -228,7 +229,7 @@ func (a *App) ListIndexes(schema, table string) ([]*IndexInfo, error) {
 
 	a.logger.Debug("Listing indexes", "schema", schema, "table", table)
 
-	indexes, err := a.client.ListIndexes(schema, table)
+	indexes, err := a.client.ListIndexes(ctx, schema, table)
 	if err != nil {
 		a.logger.Error("Failed to list indexes", "error", err, "schema", schema, "table", table)
 		return nil, fmt.Errorf("failed to list indexes: %w", err)
@@ -239,8 +240,8 @@ func (a *App) ListIndexes(schema, table string) ([]*IndexInfo, error) {
 }
 
 // ExecuteQuery executes a read-only query and returns the results.
-func (a *App) ExecuteQuery(opts *ExecuteQueryOptions) (*QueryResult, error) {
-	if err := a.ensureConnection(); err != nil {
+func (a *App) ExecuteQuery(ctx context.Context, opts *ExecuteQueryOptions) (*QueryResult, error) {
+	if err := a.ensureConnection(ctx); err != nil {
 		return nil, err
 	}
 
@@ -250,7 +251,7 @@ func (a *App) ExecuteQuery(opts *ExecuteQueryOptions) (*QueryResult, error) {
 
 	a.logger.Debug("Executing query", "query", opts.Query)
 
-	result, err := a.client.ExecuteQuery(opts.Query, opts.Args...)
+	result, err := a.client.ExecuteQuery(ctx, opts.Query, opts.Args...)
 	if err != nil {
 		a.logger.Error("Failed to execute query", "error", err, "query", opts.Query)
 		return nil, fmt.Errorf("failed to execute query: %w", err)
@@ -267,12 +268,12 @@ func (a *App) ExecuteQuery(opts *ExecuteQueryOptions) (*QueryResult, error) {
 }
 
 // GetCurrentDatabase returns the name of the current database.
-func (a *App) GetCurrentDatabase() (string, error) {
-	if err := a.ensureConnection(); err != nil {
+func (a *App) GetCurrentDatabase(ctx context.Context) (string, error) {
+	if err := a.ensureConnection(ctx); err != nil {
 		return "", err
 	}
 
-	dbName, err := a.client.GetCurrentDatabase()
+	dbName, err := a.client.GetCurrentDatabase(ctx)
 	if err != nil {
 		return "", fmt.Errorf("failed to get current database: %w", err)
 	}
@@ -280,8 +281,8 @@ func (a *App) GetCurrentDatabase() (string, error) {
 }
 
 // ExplainQuery returns the execution plan for a query.
-func (a *App) ExplainQuery(query string, args ...any) (*QueryResult, error) {
-	if err := a.ensureConnection(); err != nil {
+func (a *App) ExplainQuery(ctx context.Context, query string, args ...any) (*QueryResult, error) {
+	if err := a.ensureConnection(ctx); err != nil {
 		return nil, err
 	}
 
@@ -291,7 +292,7 @@ func (a *App) ExplainQuery(query string, args ...any) (*QueryResult, error) {
 
 	a.logger.Debug("Explaining query", "query", query)
 
-	result, err := a.client.ExplainQuery(query, args...)
+	result, err := a.client.ExplainQuery(ctx, query, args...)
 	if err != nil {
 		a.logger.Error("Failed to explain query", "error", err, "query", query)
 		return nil, fmt.Errorf("failed to explain query: %w", err)
@@ -302,13 +303,13 @@ func (a *App) ExplainQuery(query string, args ...any) (*QueryResult, error) {
 }
 
 // ValidateConnection checks if the database connection is valid (for backward compatibility).
-func (a *App) ValidateConnection() error {
-	return a.ensureConnection()
+func (a *App) ValidateConnection(ctx context.Context) error {
+	return a.ensureConnection(ctx)
 }
 
 // tryConnect attempts to connect using environment variables as a fallback mechanism.
 // Returns ErrNoConnectionString if no environment variables are set.
-func (a *App) tryConnect() error {
+func (a *App) tryConnect(ctx context.Context) error {
 	// Try environment variables as fallback
 	connectionString := os.Getenv("POSTGRES_URL")
 	if connectionString == "" {
@@ -319,21 +320,23 @@ func (a *App) tryConnect() error {
 		return ErrNoConnectionString
 	}
 
-	return a.Connect(connectionString)
+	return a.Connect(ctx, connectionString)
 }
 
 // ensureConnection checks if the database connection is valid and attempts to reconnect if needed.
-func (a *App) ensureConnection() error {
+func (a *App) ensureConnection(ctx context.Context) error {
 	if a.client == nil {
 		return ErrConnectionRequired
 	}
 
-	// Test current connection
-	if err := a.client.Ping(); err != nil {
+	// Test current connection with request context
+	if err := a.client.Ping(ctx); err != nil {
 		a.logger.Debug("Database connection lost, attempting to reconnect", "error", err)
 
-		// Attempt to reconnect
-		if reconnectErr := a.tryConnect(); reconnectErr != nil {
+		// Attempt to reconnect using background context
+		// Reconnection is infrastructure work and shouldn't be cancelled by request timeout
+		reconnectCtx := context.Background()
+		if reconnectErr := a.tryConnect(reconnectCtx); reconnectErr != nil { //nolint:contextcheck // Intentional: reconnection must not be cancelled by request context
 			a.logger.Error("Failed to reconnect to database", "ping_error", err, "reconnect_error", reconnectErr)
 			return ErrConnectionRequired
 		}

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"log/slog"
@@ -15,8 +16,8 @@ type MockPostgreSQLClient struct {
 	mock.Mock
 }
 
-func (m *MockPostgreSQLClient) Connect(connectionString string) error {
-	args := m.Called(connectionString)
+func (m *MockPostgreSQLClient) Connect(ctx context.Context, connectionString string) error {
+	args := m.Called(ctx, connectionString)
 	return args.Error(0)
 }
 
@@ -25,82 +26,82 @@ func (m *MockPostgreSQLClient) Close() error {
 	return args.Error(0)
 }
 
-func (m *MockPostgreSQLClient) Ping() error {
-	args := m.Called()
+func (m *MockPostgreSQLClient) Ping(ctx context.Context) error {
+	args := m.Called(ctx)
 	return args.Error(0)
 }
 
-func (m *MockPostgreSQLClient) ListDatabases() ([]*DatabaseInfo, error) {
-	args := m.Called()
+func (m *MockPostgreSQLClient) ListDatabases(ctx context.Context) ([]*DatabaseInfo, error) {
+	args := m.Called(ctx)
 	if databases, ok := args.Get(0).([]*DatabaseInfo); ok {
 		return databases, args.Error(1)
 	}
 	return nil, args.Error(1)
 }
 
-func (m *MockPostgreSQLClient) GetCurrentDatabase() (string, error) {
-	args := m.Called()
+func (m *MockPostgreSQLClient) GetCurrentDatabase(ctx context.Context) (string, error) {
+	args := m.Called(ctx)
 	return args.String(0), args.Error(1)
 }
 
-func (m *MockPostgreSQLClient) ListSchemas() ([]*SchemaInfo, error) {
-	args := m.Called()
+func (m *MockPostgreSQLClient) ListSchemas(ctx context.Context) ([]*SchemaInfo, error) {
+	args := m.Called(ctx)
 	if schemas, ok := args.Get(0).([]*SchemaInfo); ok {
 		return schemas, args.Error(1)
 	}
 	return nil, args.Error(1)
 }
 
-func (m *MockPostgreSQLClient) ListTables(schema string) ([]*TableInfo, error) {
-	args := m.Called(schema)
+func (m *MockPostgreSQLClient) ListTables(ctx context.Context, schema string) ([]*TableInfo, error) {
+	args := m.Called(ctx, schema)
 	if tables, ok := args.Get(0).([]*TableInfo); ok {
 		return tables, args.Error(1)
 	}
 	return nil, args.Error(1)
 }
 
-func (m *MockPostgreSQLClient) ListTablesWithStats(schema string) ([]*TableInfo, error) {
-	args := m.Called(schema)
+func (m *MockPostgreSQLClient) ListTablesWithStats(ctx context.Context, schema string) ([]*TableInfo, error) {
+	args := m.Called(ctx, schema)
 	if tables, ok := args.Get(0).([]*TableInfo); ok {
 		return tables, args.Error(1)
 	}
 	return nil, args.Error(1)
 }
 
-func (m *MockPostgreSQLClient) DescribeTable(schema, table string) ([]*ColumnInfo, error) {
-	args := m.Called(schema, table)
+func (m *MockPostgreSQLClient) DescribeTable(ctx context.Context, schema, table string) ([]*ColumnInfo, error) {
+	args := m.Called(ctx, schema, table)
 	if columns, ok := args.Get(0).([]*ColumnInfo); ok {
 		return columns, args.Error(1)
 	}
 	return nil, args.Error(1)
 }
 
-func (m *MockPostgreSQLClient) GetTableStats(schema, table string) (*TableInfo, error) {
-	args := m.Called(schema, table)
+func (m *MockPostgreSQLClient) GetTableStats(ctx context.Context, schema, table string) (*TableInfo, error) {
+	args := m.Called(ctx, schema, table)
 	if stats, ok := args.Get(0).(*TableInfo); ok {
 		return stats, args.Error(1)
 	}
 	return nil, args.Error(1)
 }
 
-func (m *MockPostgreSQLClient) ListIndexes(schema, table string) ([]*IndexInfo, error) {
-	args := m.Called(schema, table)
+func (m *MockPostgreSQLClient) ListIndexes(ctx context.Context, schema, table string) ([]*IndexInfo, error) {
+	args := m.Called(ctx, schema, table)
 	if indexes, ok := args.Get(0).([]*IndexInfo); ok {
 		return indexes, args.Error(1)
 	}
 	return nil, args.Error(1)
 }
 
-func (m *MockPostgreSQLClient) ExecuteQuery(query string, args ...interface{}) (*QueryResult, error) {
-	mockArgs := m.Called(query, args)
+func (m *MockPostgreSQLClient) ExecuteQuery(ctx context.Context, query string, args ...interface{}) (*QueryResult, error) {
+	mockArgs := m.Called(ctx, query, args)
 	if result, ok := mockArgs.Get(0).(*QueryResult); ok {
 		return result, mockArgs.Error(1)
 	}
 	return nil, mockArgs.Error(1)
 }
 
-func (m *MockPostgreSQLClient) ExplainQuery(query string, args ...interface{}) (*QueryResult, error) {
-	mockArgs := m.Called(query, args)
+func (m *MockPostgreSQLClient) ExplainQuery(ctx context.Context, query string, args ...interface{}) (*QueryResult, error) {
+	mockArgs := m.Called(ctx, query, args)
 	if result, ok := mockArgs.Get(0).(*QueryResult); ok {
 		return result, mockArgs.Error(1)
 	}
@@ -160,9 +161,9 @@ func TestApp_ValidateConnection(t *testing.T) {
 	mockClient := &MockPostgreSQLClient{}
 	app.client = mockClient
 
-	mockClient.On("Ping").Return(nil)
+	mockClient.On("Ping", mock.Anything).Return(nil)
 
-	err := app.ValidateConnection()
+	err := app.ValidateConnection(context.Background())
 	assert.NoError(t, err)
 	mockClient.AssertExpectations(t)
 }
@@ -171,7 +172,7 @@ func TestApp_ValidateConnectionNilClient(t *testing.T) {
 	app, _ := New()
 	app.client = nil
 
-	err := app.ValidateConnection()
+	err := app.ValidateConnection(context.Background())
 	assert.Error(t, err)
 	assert.Equal(t, ErrConnectionRequired, err)
 }
@@ -183,9 +184,9 @@ func TestApp_ValidateConnectionPingError(t *testing.T) {
 
 	// Mock ping failure and reconnection failure (no env vars set)
 	pingError := errors.New("ping failed")
-	mockClient.On("Ping").Return(pingError)
+	mockClient.On("Ping", mock.Anything).Return(pingError)
 
-	err := app.ValidateConnection()
+	err := app.ValidateConnection(context.Background())
 	assert.Error(t, err)
 	assert.Equal(t, ErrConnectionRequired, err)
 	mockClient.AssertExpectations(t)
@@ -201,10 +202,10 @@ func TestApp_ListDatabases(t *testing.T) {
 		{Name: "db2", Owner: "user2", Encoding: "UTF8"},
 	}
 
-	mockClient.On("Ping").Return(nil)
-	mockClient.On("ListDatabases").Return(expectedDatabases, nil)
+	mockClient.On("Ping", mock.Anything).Return(nil)
+	mockClient.On("ListDatabases", mock.Anything).Return(expectedDatabases, nil)
 
-	databases, err := app.ListDatabases()
+	databases, err := app.ListDatabases(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, expectedDatabases, databases)
 	mockClient.AssertExpectations(t)
@@ -216,9 +217,9 @@ func TestApp_ListDatabasesConnectionError(t *testing.T) {
 	app.client = mockClient
 
 	expectedError := errors.New("connection error")
-	mockClient.On("Ping").Return(expectedError)
+	mockClient.On("Ping", mock.Anything).Return(expectedError)
 
-	databases, err := app.ListDatabases()
+	databases, err := app.ListDatabases(context.Background())
 	assert.Error(t, err)
 	assert.Nil(t, databases)
 	// After our refactoring, ping failure leads to reconnection attempt, which fails due to no env vars,
@@ -234,10 +235,10 @@ func TestApp_GetCurrentDatabase(t *testing.T) {
 
 	expectedDB := "testdb"
 
-	mockClient.On("Ping").Return(nil)
-	mockClient.On("GetCurrentDatabase").Return(expectedDB, nil)
+	mockClient.On("Ping", mock.Anything).Return(nil)
+	mockClient.On("GetCurrentDatabase", mock.Anything).Return(expectedDB, nil)
 
-	dbName, err := app.GetCurrentDatabase()
+	dbName, err := app.GetCurrentDatabase(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, expectedDB, dbName)
 	mockClient.AssertExpectations(t)
@@ -253,10 +254,10 @@ func TestApp_ListSchemas(t *testing.T) {
 		{Name: "private", Owner: "user"},
 	}
 
-	mockClient.On("Ping").Return(nil)
-	mockClient.On("ListSchemas").Return(expectedSchemas, nil)
+	mockClient.On("Ping", mock.Anything).Return(nil)
+	mockClient.On("ListSchemas", mock.Anything).Return(expectedSchemas, nil)
 
-	schemas, err := app.ListSchemas()
+	schemas, err := app.ListSchemas(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, expectedSchemas, schemas)
 	mockClient.AssertExpectations(t)
@@ -276,10 +277,10 @@ func TestApp_ListTables(t *testing.T) {
 		Schema: "public",
 	}
 
-	mockClient.On("Ping").Return(nil)
-	mockClient.On("ListTables", "public").Return(expectedTables, nil)
+	mockClient.On("Ping", mock.Anything).Return(nil)
+	mockClient.On("ListTables", mock.Anything, "public").Return(expectedTables, nil)
 
-	tables, err := app.ListTables(opts)
+	tables, err := app.ListTables(context.Background(), opts)
 	assert.NoError(t, err)
 	assert.Equal(t, expectedTables, tables)
 	mockClient.AssertExpectations(t)
@@ -296,10 +297,10 @@ func TestApp_ListTablesWithDefaultSchema(t *testing.T) {
 
 	opts := &ListTablesOptions{}
 
-	mockClient.On("Ping").Return(nil)
-	mockClient.On("ListTables", DefaultSchema).Return(expectedTables, nil)
+	mockClient.On("Ping", mock.Anything).Return(nil)
+	mockClient.On("ListTables", mock.Anything, DefaultSchema).Return(expectedTables, nil)
 
-	tables, err := app.ListTables(opts)
+	tables, err := app.ListTables(context.Background(), opts)
 	assert.NoError(t, err)
 	assert.Equal(t, expectedTables, tables)
 	mockClient.AssertExpectations(t)
@@ -314,10 +315,10 @@ func TestApp_ListTablesWithNilOptions(t *testing.T) {
 		{Schema: "public", Name: "users", Type: "table", Owner: "user"},
 	}
 
-	mockClient.On("Ping").Return(nil)
-	mockClient.On("ListTables", DefaultSchema).Return(expectedTables, nil)
+	mockClient.On("Ping", mock.Anything).Return(nil)
+	mockClient.On("ListTables", mock.Anything, DefaultSchema).Return(expectedTables, nil)
 
-	tables, err := app.ListTables(nil)
+	tables, err := app.ListTables(context.Background(), nil)
 	assert.NoError(t, err)
 	assert.Equal(t, expectedTables, tables)
 	mockClient.AssertExpectations(t)
@@ -344,10 +345,10 @@ func TestApp_ListTablesWithSize(t *testing.T) {
 		IncludeSize: true,
 	}
 
-	mockClient.On("Ping").Return(nil)
-	mockClient.On("ListTablesWithStats", "public").Return(tablesWithStats, nil)
+	mockClient.On("Ping", mock.Anything).Return(nil)
+	mockClient.On("ListTablesWithStats", mock.Anything, "public").Return(tablesWithStats, nil)
 
-	tables, err := app.ListTables(opts)
+	tables, err := app.ListTables(context.Background(), opts)
 	assert.NoError(t, err)
 	assert.Len(t, tables, 1)
 	assert.Equal(t, int64(1000), tables[0].RowCount)
@@ -365,10 +366,10 @@ func TestApp_DescribeTable(t *testing.T) {
 		{Name: "name", DataType: "varchar(255)", IsNullable: true},
 	}
 
-	mockClient.On("Ping").Return(nil)
-	mockClient.On("DescribeTable", "public", "users").Return(expectedColumns, nil)
+	mockClient.On("Ping", mock.Anything).Return(nil)
+	mockClient.On("DescribeTable", mock.Anything, "public", "users").Return(expectedColumns, nil)
 
-	columns, err := app.DescribeTable("public", "users")
+	columns, err := app.DescribeTable(context.Background(), "public", "users")
 	assert.NoError(t, err)
 	assert.Equal(t, expectedColumns, columns)
 	mockClient.AssertExpectations(t)
@@ -377,7 +378,7 @@ func TestApp_DescribeTable(t *testing.T) {
 func TestApp_DescribeTableEmptyTableName(t *testing.T) {
 	app, _ := New()
 
-	columns, err := app.DescribeTable("public", "")
+	columns, err := app.DescribeTable(context.Background(), "public", "")
 	assert.Error(t, err)
 	assert.Nil(t, columns)
 	assert.Contains(t, err.Error(), "database connection failed")
@@ -392,10 +393,10 @@ func TestApp_DescribeTableDefaultSchema(t *testing.T) {
 		{Name: "id", DataType: "integer", IsNullable: false},
 	}
 
-	mockClient.On("Ping").Return(nil)
-	mockClient.On("DescribeTable", DefaultSchema, "users").Return(expectedColumns, nil)
+	mockClient.On("Ping", mock.Anything).Return(nil)
+	mockClient.On("DescribeTable", mock.Anything, DefaultSchema, "users").Return(expectedColumns, nil)
 
-	columns, err := app.DescribeTable("", "users")
+	columns, err := app.DescribeTable(context.Background(), "", "users")
 	assert.NoError(t, err)
 	assert.Equal(t, expectedColumns, columns)
 	mockClient.AssertExpectations(t)
@@ -416,10 +417,10 @@ func TestApp_ExecuteQuery(t *testing.T) {
 		Query: "SELECT id, name FROM users",
 	}
 
-	mockClient.On("Ping").Return(nil)
-	mockClient.On("ExecuteQuery", "SELECT id, name FROM users", []interface{}(nil)).Return(expectedResult, nil)
+	mockClient.On("Ping", mock.Anything).Return(nil)
+	mockClient.On("ExecuteQuery", mock.Anything, "SELECT id, name FROM users", []interface{}(nil)).Return(expectedResult, nil)
 
-	result, err := app.ExecuteQuery(opts)
+	result, err := app.ExecuteQuery(context.Background(), opts)
 	assert.NoError(t, err)
 	assert.Equal(t, expectedResult, result)
 	mockClient.AssertExpectations(t)
@@ -441,10 +442,10 @@ func TestApp_ExecuteQueryWithLimit(t *testing.T) {
 		Limit: 2,
 	}
 
-	mockClient.On("Ping").Return(nil)
-	mockClient.On("ExecuteQuery", "SELECT id, name FROM users", []interface{}(nil)).Return(originalResult, nil)
+	mockClient.On("Ping", mock.Anything).Return(nil)
+	mockClient.On("ExecuteQuery", mock.Anything, "SELECT id, name FROM users", []interface{}(nil)).Return(originalResult, nil)
 
-	result, err := app.ExecuteQuery(opts)
+	result, err := app.ExecuteQuery(context.Background(), opts)
 	assert.NoError(t, err)
 	assert.Len(t, result.Rows, 2)
 	assert.Equal(t, 2, result.RowCount)
@@ -454,7 +455,7 @@ func TestApp_ExecuteQueryWithLimit(t *testing.T) {
 func TestApp_ExecuteQueryNilOptions(t *testing.T) {
 	app, _ := New()
 
-	result, err := app.ExecuteQuery(nil)
+	result, err := app.ExecuteQuery(context.Background(), nil)
 	assert.Error(t, err)
 	assert.Nil(t, result)
 	assert.Contains(t, err.Error(), "database connection failed")
@@ -465,7 +466,7 @@ func TestApp_ExecuteQueryEmptyQuery(t *testing.T) {
 
 	opts := &ExecuteQueryOptions{}
 
-	result, err := app.ExecuteQuery(opts)
+	result, err := app.ExecuteQuery(context.Background(), opts)
 	assert.Error(t, err)
 	assert.Nil(t, result)
 	assert.Contains(t, err.Error(), "database connection failed")
@@ -482,10 +483,10 @@ func TestApp_ExplainQuery(t *testing.T) {
 		RowCount: 1,
 	}
 
-	mockClient.On("Ping").Return(nil)
-	mockClient.On("ExplainQuery", "SELECT * FROM users", []interface{}(nil)).Return(expectedResult, nil)
+	mockClient.On("Ping", mock.Anything).Return(nil)
+	mockClient.On("ExplainQuery", mock.Anything, "SELECT * FROM users", []interface{}(nil)).Return(expectedResult, nil)
 
-	result, err := app.ExplainQuery("SELECT * FROM users")
+	result, err := app.ExplainQuery(context.Background(), "SELECT * FROM users")
 	assert.NoError(t, err)
 	assert.Equal(t, expectedResult, result)
 	mockClient.AssertExpectations(t)
@@ -494,7 +495,7 @@ func TestApp_ExplainQuery(t *testing.T) {
 func TestApp_ExplainQueryEmptyQuery(t *testing.T) {
 	app, _ := New()
 
-	result, err := app.ExplainQuery("")
+	result, err := app.ExplainQuery(context.Background(), "")
 	assert.Error(t, err)
 	assert.Nil(t, result)
 	assert.Contains(t, err.Error(), "database connection failed")
@@ -512,10 +513,10 @@ func TestApp_GetTableStats(t *testing.T) {
 		Size:     "5MB",
 	}
 
-	mockClient.On("Ping").Return(nil)
-	mockClient.On("GetTableStats", "public", "users").Return(expectedStats, nil)
+	mockClient.On("Ping", mock.Anything).Return(nil)
+	mockClient.On("GetTableStats", mock.Anything, "public", "users").Return(expectedStats, nil)
 
-	stats, err := app.GetTableStats("public", "users")
+	stats, err := app.GetTableStats(context.Background(), "public", "users")
 	assert.NoError(t, err)
 	assert.Equal(t, expectedStats, stats)
 	mockClient.AssertExpectations(t)
@@ -531,10 +532,10 @@ func TestApp_ListIndexes(t *testing.T) {
 		{Name: "idx_users_email", Table: "users", Columns: []string{"email"}, IsUnique: true, IsPrimary: false},
 	}
 
-	mockClient.On("Ping").Return(nil)
-	mockClient.On("ListIndexes", "public", "users").Return(expectedIndexes, nil)
+	mockClient.On("Ping", mock.Anything).Return(nil)
+	mockClient.On("ListIndexes", mock.Anything, "public", "users").Return(expectedIndexes, nil)
 
-	indexes, err := app.ListIndexes("public", "users")
+	indexes, err := app.ListIndexes(context.Background(), "public", "users")
 	assert.NoError(t, err)
 	assert.Equal(t, expectedIndexes, indexes)
 	mockClient.AssertExpectations(t)
@@ -548,10 +549,10 @@ func TestApp_Connect_Success(t *testing.T) {
 	connectionString := "postgres://user:pass@localhost/db"
 
 	// Mock expectations
-	mockClient.On("Ping").Return(errors.New("not connected")) // No existing connection
-	mockClient.On("Connect", connectionString).Return(nil)
+	mockClient.On("Ping", mock.Anything).Return(errors.New("not connected")) // No existing connection
+	mockClient.On("Connect", mock.Anything, connectionString).Return(nil)
 
-	err := app.Connect(connectionString)
+	err := app.Connect(context.Background(), connectionString)
 	assert.NoError(t, err)
 	mockClient.AssertExpectations(t)
 }
@@ -559,7 +560,7 @@ func TestApp_Connect_Success(t *testing.T) {
 func TestApp_Connect_EmptyString(t *testing.T) {
 	app, _ := New()
 
-	err := app.Connect("")
+	err := app.Connect(context.Background(), "")
 	assert.Error(t, err)
 	assert.Equal(t, ErrNoConnectionString, err)
 }
@@ -572,11 +573,11 @@ func TestApp_Connect_ReconnectClosesExisting(t *testing.T) {
 	connectionString := "postgres://user:pass@localhost/db"
 
 	// Mock expectations for reconnection scenario
-	mockClient.On("Ping").Return(nil).Once()      // Existing connection is alive
+	mockClient.On("Ping", mock.Anything).Return(nil).Once()      // Existing connection is alive
 	mockClient.On("Close").Return(nil).Once()     // Close existing
-	mockClient.On("Connect", connectionString).Return(nil)
+	mockClient.On("Connect", mock.Anything, connectionString).Return(nil)
 
-	err := app.Connect(connectionString)
+	err := app.Connect(context.Background(), connectionString)
 	assert.NoError(t, err)
 	mockClient.AssertExpectations(t)
 }
@@ -590,10 +591,10 @@ func TestApp_Connect_ConnectError(t *testing.T) {
 	expectedError := errors.New("connection failed")
 
 	// Mock expectations
-	mockClient.On("Ping").Return(errors.New("not connected")) // No existing connection
-	mockClient.On("Connect", connectionString).Return(expectedError)
+	mockClient.On("Ping", mock.Anything).Return(errors.New("not connected")) // No existing connection
+	mockClient.On("Connect", mock.Anything, connectionString).Return(expectedError)
 
-	err := app.Connect(connectionString)
+	err := app.Connect(context.Background(), connectionString)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to connect")
 	mockClient.AssertExpectations(t)

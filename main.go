@@ -135,6 +135,7 @@ func getConnectionString(
 
 // handleConnectDatabaseRequest handles the connect_database tool request.
 func handleConnectDatabaseRequest(
+	ctx context.Context,
 	args map[string]any,
 	appInstance *app.App,
 	debugLogger *slog.Logger,
@@ -147,13 +148,13 @@ func handleConnectDatabaseRequest(
 	}
 
 	// Attempt to connect
-	if err := appInstance.Connect(connectionString); err != nil {
+	if err := appInstance.Connect(ctx, connectionString); err != nil {
 		debugLogger.Error("Failed to connect to database", "error", err)
 		return mcp.NewToolResultError(fmt.Sprintf("Failed to connect to database: %v", err)), nil
 	}
 
 	// Get current database name to confirm connection
-	dbName, err := appInstance.GetCurrentDatabase()
+	dbName, err := appInstance.GetCurrentDatabase(ctx)
 	if err != nil {
 		debugLogger.Warn("Connected but failed to get database name", "error", err)
 		dbName = "unknown"
@@ -204,7 +205,7 @@ func setupConnectDatabaseTool(s *server.MCPServer, appInstance *app.App, debugLo
 	)
 
 	s.AddTool(connectDBTool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		return handleConnectDatabaseRequest(request.GetArguments(), appInstance, debugLogger)
+		return handleConnectDatabaseRequest(ctx, request.GetArguments(), appInstance, debugLogger)
 	})
 }
 
@@ -218,7 +219,7 @@ func setupListDatabasesTool(s *server.MCPServer, appInstance *app.App, debugLogg
 		debugLogger.Debug("Received list_databases tool request")
 
 		// List databases
-		databases, err := appInstance.ListDatabases()
+		databases, err := appInstance.ListDatabases(ctx)
 		if err != nil {
 			debugLogger.Error("Failed to list databases", "error", err)
 			return mcp.NewToolResultError(fmt.Sprintf("Failed to list databases: %v", err)), nil
@@ -246,7 +247,7 @@ func setupListSchemasTool(s *server.MCPServer, appInstance *app.App, debugLogger
 		debugLogger.Debug("Received list_schemas tool request")
 
 		// List schemas
-		schemas, err := appInstance.ListSchemas()
+		schemas, err := appInstance.ListSchemas(ctx)
 		if err != nil {
 			debugLogger.Error("Failed to list schemas", "error", err)
 			return mcp.NewToolResultError(fmt.Sprintf("Failed to list schemas: %v", err)), nil
@@ -294,7 +295,7 @@ func setupListTablesTool(s *server.MCPServer, appInstance *app.App, debugLogger 
 		debugLogger.Debug("Processing list_tables request", "schema", opts.Schema, "include_size", opts.IncludeSize)
 
 		// List tables
-		tables, err := appInstance.ListTables(opts)
+		tables, err := appInstance.ListTables(ctx, opts)
 		if err != nil {
 			debugLogger.Error("Failed to list tables", "error", err)
 			return mcp.NewToolResultError(fmt.Sprintf("Failed to list tables: %v", err)), nil
@@ -350,7 +351,7 @@ type TableToolConfig struct {
 	Name        string
 	Description string
 	TableDesc   string
-	Operation   func(appInstance *app.App, schema, table string) (any, error)
+	Operation   func(ctx context.Context, appInstance *app.App, schema, table string) (any, error)
 	SuccessMsg  func(result any, schema, table string) (string, []any)
 	ErrorMsg    string
 }
@@ -377,7 +378,7 @@ func setupTableTool(s *server.MCPServer, appInstance *app.App, debugLogger *slog
 			return mcp.NewToolResultError(err.Error()), nil
 		}
 
-		result, err := config.Operation(appInstance, schema, table)
+		result, err := config.Operation(ctx, appInstance, schema, table)
 		if err != nil {
 			debugLogger.Error("Failed to "+config.ErrorMsg, "error", err, "schema", schema, "table", table)
 			return mcp.NewToolResultError(fmt.Sprintf("Failed to %s: %v", config.ErrorMsg, err)), nil
@@ -400,8 +401,8 @@ func setupDescribeTableTool(s *server.MCPServer, appInstance *app.App, debugLogg
 		Name:        "describe_table",
 		Description: "Get detailed information about a table's structure (columns, types, constraints)",
 		TableDesc:   "Table name to describe",
-		Operation: func(appInstance *app.App, schema, table string) (any, error) {
-			return appInstance.DescribeTable(schema, table)
+		Operation: func(ctx context.Context, appInstance *app.App, schema, table string) (any, error) {
+			return appInstance.DescribeTable(ctx, schema, table)
 		},
 		SuccessMsg: func(result any, schema, table string) (string, []any) {
 			columns, ok := result.([]*app.ColumnInfo)
@@ -450,7 +451,7 @@ func setupExecuteQueryTool(s *server.MCPServer, appInstance *app.App, debugLogge
 		debugLogger.Debug("Processing execute_query request", "query", query, "limit", opts.Limit)
 
 		// Execute query
-		result, err := appInstance.ExecuteQuery(opts)
+		result, err := appInstance.ExecuteQuery(ctx, opts)
 		if err != nil {
 			debugLogger.Error("Failed to execute query", "error", err, "query", query)
 			return mcp.NewToolResultError(fmt.Sprintf("Failed to execute query: %v", err)), nil
@@ -474,8 +475,8 @@ func setupListIndexesTool(s *server.MCPServer, appInstance *app.App, debugLogger
 		Name:        "list_indexes",
 		Description: "List indexes for a specific table",
 		TableDesc:   "Table name to list indexes for",
-		Operation: func(appInstance *app.App, schema, table string) (any, error) {
-			return appInstance.ListIndexes(schema, table)
+		Operation: func(ctx context.Context, appInstance *app.App, schema, table string) (any, error) {
+			return appInstance.ListIndexes(ctx, schema, table)
 		},
 		SuccessMsg: func(result any, schema, table string) (string, []any) {
 			indexes, ok := result.([]*app.IndexInfo)
@@ -512,7 +513,7 @@ func setupExplainQueryTool(s *server.MCPServer, appInstance *app.App, debugLogge
 		debugLogger.Debug("Processing explain_query request", "query", query)
 
 		// Explain query
-		result, err := appInstance.ExplainQuery(query)
+		result, err := appInstance.ExplainQuery(ctx, query)
 		if err != nil {
 			debugLogger.Error("Failed to explain query", "error", err, "query", query)
 			return mcp.NewToolResultError(fmt.Sprintf("Failed to explain query: %v", err)), nil
@@ -563,7 +564,7 @@ func setupGetTableStatsTool(s *server.MCPServer, appInstance *app.App, debugLogg
 		debugLogger.Debug("Processing get_table_stats request", "schema", schema, "table", table)
 
 		// Get table stats
-		stats, err := appInstance.GetTableStats(schema, table)
+		stats, err := appInstance.GetTableStats(ctx, schema, table)
 		if err != nil {
 			debugLogger.Error("Failed to get table stats", "error", err, "schema", schema, "table", table)
 			return mcp.NewToolResultError(fmt.Sprintf("Failed to get table stats: %v", err)), nil

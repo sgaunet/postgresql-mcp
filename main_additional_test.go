@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"os"
 	"testing"
@@ -101,7 +102,7 @@ func TestInitializeApp_Implementation(t *testing.T) {
 	app.SetLogger(logger)
 
 	// App should be in disconnected state initially (without environment variables)
-	err := app.ValidateConnection()
+	err := app.ValidateConnection(context.Background())
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "database connection failed")
 }
