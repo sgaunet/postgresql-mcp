@@ -33,11 +33,23 @@ type App struct {
 	logger *slog.Logger
 }
 
-// New creates a new App instance without establishing a connection.
+// New creates a new App instance with the provided PostgreSQLClient.
+// This constructor accepts a client implementation for dependency injection,
+// making it easy to inject mocks or alternative implementations for testing.
+func New(client PostgreSQLClient) *App {
+	return &App{
+		client: client,
+		logger: logger.NewLogger("info"),
+	}
+}
+
+// NewDefault creates a new App instance with a default PostgreSQLClient.
 // Use Connect() method or connect_database tool to establish connection.
-func New() (*App, error) {
+// This is a convenience constructor for production use.
+func NewDefault() (*App, error) {
+	client := NewPostgreSQLClient()
 	app := &App{
-		client: NewPostgreSQLClient(),
+		client: client,
 		logger: logger.NewLogger("info"),
 	}
 

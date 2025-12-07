@@ -98,7 +98,7 @@ func (m *MockApp) Disconnect() error {
 
 func TestSetupListDatabasesTool(t *testing.T) {
 	s := server.NewMCPServer("test", "1.0.0")
-	realApp, err := app.New()
+	realApp, err := app.NewDefault()
 	assert.NoError(t, err)
 	logger := slog.Default()
 
@@ -109,7 +109,7 @@ func TestSetupListDatabasesTool(t *testing.T) {
 
 func TestSetupListSchemasTool(t *testing.T) {
 	s := server.NewMCPServer("test", "1.0.0")
-	realApp, err := app.New()
+	realApp, err := app.NewDefault()
 	assert.NoError(t, err)
 	logger := slog.Default()
 
@@ -120,7 +120,7 @@ func TestSetupListSchemasTool(t *testing.T) {
 
 func TestSetupListTablesTool(t *testing.T) {
 	s := server.NewMCPServer("test", "1.0.0")
-	realApp, err := app.New()
+	realApp, err := app.NewDefault()
 	assert.NoError(t, err)
 	logger := slog.Default()
 
@@ -131,7 +131,7 @@ func TestSetupListTablesTool(t *testing.T) {
 
 func TestSetupDescribeTableTool(t *testing.T) {
 	s := server.NewMCPServer("test", "1.0.0")
-	realApp, err := app.New()
+	realApp, err := app.NewDefault()
 	assert.NoError(t, err)
 	logger := slog.Default()
 
@@ -142,7 +142,7 @@ func TestSetupDescribeTableTool(t *testing.T) {
 
 func TestSetupExecuteQueryTool(t *testing.T) {
 	s := server.NewMCPServer("test", "1.0.0")
-	realApp, err := app.New()
+	realApp, err := app.NewDefault()
 	assert.NoError(t, err)
 	logger := slog.Default()
 
@@ -153,7 +153,7 @@ func TestSetupExecuteQueryTool(t *testing.T) {
 
 func TestSetupListIndexesTool(t *testing.T) {
 	s := server.NewMCPServer("test", "1.0.0")
-	realApp, err := app.New()
+	realApp, err := app.NewDefault()
 	assert.NoError(t, err)
 	logger := slog.Default()
 
@@ -164,7 +164,7 @@ func TestSetupListIndexesTool(t *testing.T) {
 
 func TestSetupExplainQueryTool(t *testing.T) {
 	s := server.NewMCPServer("test", "1.0.0")
-	realApp, err := app.New()
+	realApp, err := app.NewDefault()
 	assert.NoError(t, err)
 	logger := slog.Default()
 
@@ -175,7 +175,7 @@ func TestSetupExplainQueryTool(t *testing.T) {
 
 func TestSetupGetTableStatsTool(t *testing.T) {
 	s := server.NewMCPServer("test", "1.0.0")
-	realApp, err := app.New()
+	realApp, err := app.NewDefault()
 	assert.NoError(t, err)
 	logger := slog.Default()
 
@@ -186,7 +186,7 @@ func TestSetupGetTableStatsTool(t *testing.T) {
 
 func TestRegisterAllTools(t *testing.T) {
 	s := server.NewMCPServer("test", "1.0.0")
-	realApp, err := app.New()
+	realApp, err := app.NewDefault()
 	assert.NoError(t, err)
 	logger := slog.Default()
 

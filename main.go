@@ -659,8 +659,8 @@ func handleCommandLineFlags() {
 
 // initializeApp creates and configures the application instance.
 func initializeApp() (*app.App, *slog.Logger) {
-	// Initialize the app
-	appInstance, err := app.New()
+	// Initialize the app with default client
+	appInstance, err := app.NewDefault()
 	if err != nil {
 		log.Fatalf("Failed to initialize app: %v", err)
 	}
@@ -732,7 +732,7 @@ func main() {
 
 	// Create a custom StdioServer with context support
 	stdioServer := server.NewStdioServer(s)
-	if err := stdioServer.Listen(ctx, os.Stdin, os.Stdout); err != nil && err != context.Canceled {
+	if err := stdioServer.Listen(ctx, os.Stdin, os.Stdout); err != nil && !errors.Is(err, context.Canceled) {
 		debugLogger.Error("Server error", "error", err)
 		fmt.Fprintf(os.Stderr, "Server error: %v\n", err)
 		return

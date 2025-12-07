@@ -141,7 +141,7 @@ func TestIntegration_App_Connect(t *testing.T) {
 	_, connectionString, cleanup := setupTestContainer(t)
 	defer cleanup()
 
-	appInstance, err := app.New()
+	appInstance, err := app.NewDefault()
 	require.NoError(t, err)
 	defer appInstance.Disconnect()
 
@@ -165,7 +165,7 @@ func TestIntegration_App_ConnectWithEnvironmentVariable(t *testing.T) {
 	os.Setenv("POSTGRES_URL", connectionString)
 	defer os.Unsetenv("POSTGRES_URL")
 
-	appInstance, err := app.New()
+	appInstance, err := app.NewDefault()
 	require.NoError(t, err)
 	defer appInstance.Disconnect()
 
@@ -185,7 +185,7 @@ func TestIntegration_App_ListDatabases(t *testing.T) {
 	_, connectionString, cleanup := setupTestDatabase(t)
 	defer cleanup()
 
-	appInstance, err := app.New()
+	appInstance, err := app.NewDefault()
 	require.NoError(t, err)
 	defer appInstance.Disconnect()
 
@@ -214,7 +214,7 @@ func TestIntegration_App_ListSchemas(t *testing.T) {
 	_, connectionString, cleanup := setupTestDatabase(t)
 	defer cleanup()
 
-	appInstance, err := app.New()
+	appInstance, err := app.NewDefault()
 	require.NoError(t, err)
 	defer appInstance.Disconnect()
 
@@ -241,7 +241,7 @@ func TestIntegration_App_ListTables(t *testing.T) {
 	_, connectionString, cleanup := setupTestDatabase(t)
 	defer cleanup()
 
-	appInstance, err := app.New()
+	appInstance, err := app.NewDefault()
 	require.NoError(t, err)
 	defer appInstance.Disconnect()
 
@@ -276,7 +276,7 @@ func TestIntegration_App_ListTablesWithSize(t *testing.T) {
 	_, connectionString, cleanup := setupTestDatabase(t)
 	defer cleanup()
 
-	appInstance, err := app.New()
+	appInstance, err := app.NewDefault()
 	require.NoError(t, err)
 	defer appInstance.Disconnect()
 
@@ -308,7 +308,7 @@ func TestIntegration_App_DescribeTable(t *testing.T) {
 	_, connectionString, cleanup := setupTestDatabase(t)
 	defer cleanup()
 
-	appInstance, err := app.New()
+	appInstance, err := app.NewDefault()
 	require.NoError(t, err)
 	defer appInstance.Disconnect()
 
@@ -355,7 +355,7 @@ func TestIntegration_App_ExecuteQuery(t *testing.T) {
 	_, connectionString, cleanup := setupTestDatabase(t)
 	defer cleanup()
 
-	appInstance, err := app.New()
+	appInstance, err := app.NewDefault()
 	require.NoError(t, err)
 	defer appInstance.Disconnect()
 
@@ -390,7 +390,7 @@ func TestIntegration_App_ExecuteQueryWithLimit(t *testing.T) {
 	_, connectionString, cleanup := setupTestDatabase(t)
 	defer cleanup()
 
-	appInstance, err := app.New()
+	appInstance, err := app.NewDefault()
 	require.NoError(t, err)
 	defer appInstance.Disconnect()
 
@@ -418,7 +418,7 @@ func TestIntegration_App_ListIndexes(t *testing.T) {
 	_, connectionString, cleanup := setupTestDatabase(t)
 	defer cleanup()
 
-	appInstance, err := app.New()
+	appInstance, err := app.NewDefault()
 	require.NoError(t, err)
 	defer appInstance.Disconnect()
 
@@ -503,7 +503,7 @@ func TestIntegration_App_ListIndexes_SpecialCharacters(t *testing.T) {
 	require.NoError(t, err)
 
 	// Test with app
-	appInstance, err := app.New()
+	appInstance, err := app.NewDefault()
 	require.NoError(t, err)
 	defer appInstance.Disconnect()
 
@@ -554,7 +554,7 @@ func TestIntegration_App_ExplainQuery(t *testing.T) {
 	_, connectionString, cleanup := setupTestDatabase(t)
 	defer cleanup()
 
-	appInstance, err := app.New()
+	appInstance, err := app.NewDefault()
 	require.NoError(t, err)
 	defer appInstance.Disconnect()
 
@@ -577,7 +577,7 @@ func TestIntegration_App_GetTableStats(t *testing.T) {
 	_, connectionString, cleanup := setupTestDatabase(t)
 	defer cleanup()
 
-	appInstance, err := app.New()
+	appInstance, err := app.NewDefault()
 	require.NoError(t, err)
 	defer appInstance.Disconnect()
 
@@ -604,7 +604,7 @@ func TestIntegration_App_ErrorHandling(t *testing.T) {
 	os.Setenv("POSTGRES_URL", connectionString)
 	defer os.Unsetenv("POSTGRES_URL")
 
-	appInstance, err := app.New()
+	appInstance, err := app.NewDefault()
 	require.NoError(t, err)
 	defer appInstance.Disconnect()
 
@@ -635,7 +635,7 @@ func TestIntegration_App_ConnectionValidation(t *testing.T) {
 	defer cleanup()
 
 	// Test validation without environment variable
-	appInstance, err := app.New()
+	appInstance, err := app.NewDefault()
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -648,7 +648,7 @@ func TestIntegration_App_ConnectionValidation(t *testing.T) {
 	defer os.Unsetenv("POSTGRES_URL")
 
 	// Create new instance with environment variable set
-	appInstance2, err := app.New()
+	appInstance2, err := app.NewDefault()
 	require.NoError(t, err)
 	defer appInstance2.Disconnect()
 
@@ -670,7 +670,7 @@ func BenchmarkIntegration_ListTables(b *testing.B) {
 
 	ctx := context.Background()
 
-	appInstance, err := app.New()
+	appInstance, err := app.NewDefault()
 	require.NoError(b, err)
 	defer appInstance.Disconnect()
 
@@ -702,7 +702,7 @@ func BenchmarkIntegration_ExecuteQuery(b *testing.B) {
 
 	ctx := context.Background()
 
-	appInstance, err := app.New()
+	appInstance, err := app.NewDefault()
 	require.NoError(b, err)
 	defer appInstance.Disconnect()
 
