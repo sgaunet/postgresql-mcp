@@ -10,10 +10,10 @@ var (
 	ErrConnectionRequired = errors.New(
 		"database connection failed. Please check POSTGRES_URL or DATABASE_URL environment variable",
 	)
-	ErrSchemaRequired       = errors.New("schema name is required")
-	ErrTableRequired        = errors.New("table name is required")
-	ErrQueryRequired        = errors.New("query is required")
-	ErrInvalidQuery         = errors.New("only SELECT and WITH queries are allowed")
+	ErrSchemaRequired     = errors.New("schema name is required")
+	ErrTableRequired      = errors.New("table name is required")
+	ErrQueryRequired      = errors.New("query is required")
+	ErrInvalidQuery       = errors.New("only SELECT and WITH queries are allowed")
 	ErrNoConnectionString = errors.New(
 		"no database connection string found in POSTGRES_URL or DATABASE_URL environment variables",
 	)
@@ -58,20 +58,20 @@ type ColumnInfo struct {
 
 // IndexInfo represents index metadata.
 type IndexInfo struct {
-	Name       string   `json:"name"`
-	Table      string   `json:"table"`
-	Columns    []string `json:"columns"`
-	IsUnique   bool     `json:"is_unique"`
-	IsPrimary  bool     `json:"is_primary"`
-	IndexType  string   `json:"index_type"`
-	Size       string   `json:"size,omitempty"`
+	Name      string   `json:"name"`
+	Table     string   `json:"table"`
+	Columns   []string `json:"columns"`
+	IsUnique  bool     `json:"is_unique"`
+	IsPrimary bool     `json:"is_primary"`
+	IndexType string   `json:"index_type"`
+	Size      string   `json:"size,omitempty"`
 }
 
 // QueryResult represents the result of a query execution.
 type QueryResult struct {
-	Columns []string        `json:"columns"`
-	Rows    [][]interface{} `json:"rows"`
-	RowCount int            `json:"row_count"`
+	Columns  []string        `json:"columns"`
+	Rows     [][]interface{} `json:"rows"`
+	RowCount int             `json:"row_count"`
 }
 
 // ConnectionManager handles database connection operations.

@@ -18,7 +18,6 @@ type MockApp struct {
 	mock.Mock
 }
 
-
 func (m *MockApp) GetCurrentDatabase() (string, error) {
 	args := m.Called()
 	return args.String(0), args.Error(1)
@@ -96,7 +95,6 @@ func (m *MockApp) Disconnect() error {
 	args := m.Called()
 	return args.Error(0)
 }
-
 
 func TestSetupListDatabasesTool(t *testing.T) {
 	s := server.NewMCPServer("test", "1.0.0")
@@ -260,7 +258,6 @@ func TestErrorVariables(t *testing.T) {
 }
 
 // Test MCP tool parameter validation
-
 
 func TestDescribeTableTool_ParameterValidation(t *testing.T) {
 	tests := []struct {

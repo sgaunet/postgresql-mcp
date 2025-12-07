@@ -42,9 +42,9 @@ func (c *PostgreSQLClientImpl) Connect(connectionString string) error {
 func (c *PostgreSQLClientImpl) Close() error {
 	if c.db != nil {
 		if err := c.db.Close(); err != nil {
-		return fmt.Errorf("failed to close database: %w", err)
-	}
-	return nil
+			return fmt.Errorf("failed to close database: %w", err)
+		}
+		return nil
 	}
 	return nil
 }
