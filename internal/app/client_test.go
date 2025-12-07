@@ -273,10 +273,10 @@ func TestPostgreSQLClient_ExecuteQueryInvalidQueries(t *testing.T) {
 			if tt.expectError {
 				assert.Error(t, err)
 				if tt.errorMsg == "only SELECT and WITH queries are allowed" {
-				assert.Contains(t, err.Error(), "no database connection")
-			} else {
-				assert.Contains(t, err.Error(), tt.errorMsg)
-			}
+					assert.Contains(t, err.Error(), "no database connection")
+				} else {
+					assert.Contains(t, err.Error(), tt.errorMsg)
+				}
 				assert.Nil(t, result)
 			} else {
 				assert.NoError(t, err)

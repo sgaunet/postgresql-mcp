@@ -127,9 +127,6 @@ func TestApp_SetLogger(t *testing.T) {
 	assert.Equal(t, newLogger, app.logger)
 }
 
-
-
-
 func TestApp_Disconnect(t *testing.T) {
 	app, _ := New()
 	mockClient := &MockPostgreSQLClient{}

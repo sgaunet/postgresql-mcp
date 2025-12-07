@@ -96,9 +96,9 @@ func TestPostgreSQLClient_QueryValidationLogic(t *testing.T) {
 			shouldAllow: true,
 		},
 		{
-			name:        "select lowercase",
-			query:       "select * from users",
-			shouldAllow: false,
+			name:          "select lowercase",
+			query:         "select * from users",
+			shouldAllow:   false,
 			expectedError: "only SELECT and WITH queries are allowed",
 		},
 		{

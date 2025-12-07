@@ -24,7 +24,6 @@ var (
 	ErrInvalidConnectionParameters = errors.New("invalid connection parameters")
 )
 
-
 // setupListDatabasesTool creates and registers the list_databases tool.
 func setupListDatabasesTool(s *server.MCPServer, appInstance *app.App, debugLogger *slog.Logger) {
 	listDBTool := mcp.NewTool("list_databases",
