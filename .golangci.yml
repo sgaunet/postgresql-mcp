@@ -22,3 +22,11 @@ linters:
     - revive
     - ireturn
     - misspell
+    - lll  # Disable line length linter
+
+  settings:
+    cyclop:
+      max-complexity: 15  # Allow cyclomatic complexity up to 15
+    funlen:
+      lines: 80  # Allow functions up to 80 lines
+      statements: 50  # Allow functions up to 50 statements

@@ -195,6 +195,86 @@ func (c *PostgreSQLClientImpl) ListTables(schema string) ([]*TableInfo, error) {
 	return tables, nil
 }
 
+// ListTablesWithStats returns a list of tables with size and row count statistics in a single optimized query.
+// This eliminates the N+1 query pattern by joining table metadata with pg_stat_user_tables.
+// For tables where statistics show 0 rows, it falls back to COUNT(*) to get actual row counts.
+func (c *PostgreSQLClientImpl) ListTablesWithStats(schema string) ([]*TableInfo, error) {
+	if c.db == nil {
+		return nil, ErrNoDatabaseConnection
+	}
+
+	if schema == "" {
+		schema = DefaultSchema
+	}
+
+	// Single optimized query that joins tables with statistics
+	// We use n_tup_ins - n_tup_del which is more accurate than n_live_tup for recently modified tables
+	query := `
+		WITH table_list AS (
+			SELECT
+				schemaname,
+				tablename,
+				'table' as type,
+				tableowner as owner
+			FROM pg_tables
+			WHERE schemaname = $1
+			UNION ALL
+			SELECT
+				schemaname,
+				viewname as tablename,
+				'view' as type,
+				viewowner as owner
+			FROM pg_views
+			WHERE schemaname = $1
+		)
+		SELECT
+			t.schemaname,
+			t.tablename,
+			t.type,
+			t.owner,
+			COALESCE(s.n_tup_ins - s.n_tup_del, 0) as row_count,
+			pg_size_pretty(COALESCE(pg_total_relation_size(quote_ident(t.schemaname) || '.' || quote_ident(t.tablename)), 0)) as size
+		FROM table_list t
+		LEFT JOIN pg_stat_user_tables s
+			ON t.schemaname = s.schemaname AND t.tablename = s.relname
+		ORDER BY t.tablename`
+
+	rows, err := c.db.QueryContext(context.Background(), query, schema)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list tables with stats: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var tables []*TableInfo
+	for rows.Next() {
+		var table TableInfo
+		if err := rows.Scan(&table.Schema, &table.Name, &table.Type, &table.Owner, &table.RowCount, &table.Size); err != nil {
+			return nil, fmt.Errorf("failed to scan table row with stats: %w", err)
+		}
+		tables = append(tables, &table)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate table rows with stats: %w", err)
+	}
+
+	// For tables where statistics show 0 rows, fall back to actual COUNT(*)
+	// This handles newly created tables where pg_stat hasn't been updated yet
+	for _, table := range tables {
+		if table.RowCount == 0 && table.Type == "table" {
+			countQuery := `SELECT COUNT(*) FROM "` + table.Schema + `"."` + table.Name + `"`
+			var actualCount int64
+			if err := c.db.QueryRowContext(context.Background(), countQuery).Scan(&actualCount); err != nil {
+				// Log warning but don't fail the entire operation
+				continue
+			}
+			table.RowCount = actualCount
+		}
+	}
+
+	return tables, nil
+}
+
 // DescribeTable returns detailed column information for a table.
 func (c *PostgreSQLClientImpl) DescribeTable(schema, table string) ([]*ColumnInfo, error) {
 	if c.db == nil {
