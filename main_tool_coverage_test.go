@@ -20,7 +20,7 @@ type MockTool struct {
 // Test that all tool setup functions can be called without panicking
 func TestAllToolSetupFunctions(t *testing.T) {
 	s := server.NewMCPServer("test", "1.0.0")
-	appInstance, err := app.New()
+	appInstance, err := app.NewDefault()
 	assert.NoError(t, err)
 	logger := slog.Default()
 
@@ -62,7 +62,7 @@ func TestAllToolSetupFunctions(t *testing.T) {
 // Test parameter validation error handling in tool handlers
 func TestToolParameterValidationErrors(t *testing.T) {
 	s := server.NewMCPServer("test", "1.0.0")
-	appInstance, err := app.New()
+	appInstance, err := app.NewDefault()
 	assert.NoError(t, err)
 	logger := slog.Default()
 
@@ -116,7 +116,7 @@ func TestJSONResponseHelpers(t *testing.T) {
 // Test the registerAllTools function
 func TestRegisterAllToolsFunction(t *testing.T) {
 	s := server.NewMCPServer("test", "1.0.0")
-	appInstance, err := app.New()
+	appInstance, err := app.NewDefault()
 	assert.NoError(t, err)
 	logger := slog.Default()
 

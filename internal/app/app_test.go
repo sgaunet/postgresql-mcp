@@ -117,7 +117,16 @@ func (m *MockPostgreSQLClient) GetDB() *sql.DB {
 }
 
 func TestNew(t *testing.T) {
-	app, err := New()
+	mockClient := &MockPostgreSQLClient{}
+	app := New(mockClient)
+	assert.NotNil(t, app)
+	assert.NotNil(t, app.client)
+	assert.NotNil(t, app.logger)
+	assert.Equal(t, mockClient, app.client)
+}
+
+func TestNewDefault(t *testing.T) {
+	app, err := NewDefault()
 	assert.NoError(t, err)
 	assert.NotNil(t, app)
 	assert.NotNil(t, app.client)
@@ -125,7 +134,7 @@ func TestNew(t *testing.T) {
 }
 
 func TestApp_SetLogger(t *testing.T) {
-	app, _ := New()
+	app, _ := NewDefault()
 	originalLogger := app.logger
 
 	// Create a new logger
@@ -137,9 +146,8 @@ func TestApp_SetLogger(t *testing.T) {
 }
 
 func TestApp_Disconnect(t *testing.T) {
-	app, _ := New()
 	mockClient := &MockPostgreSQLClient{}
-	app.client = mockClient
+	app := New(mockClient)
 
 	mockClient.On("Close").Return(nil)
 
@@ -149,17 +157,15 @@ func TestApp_Disconnect(t *testing.T) {
 }
 
 func TestApp_DisconnectWithNilClient(t *testing.T) {
-	app, _ := New()
-	app.client = nil
+	app := New(nil)
 
 	err := app.Disconnect()
 	assert.NoError(t, err)
 }
 
 func TestApp_ValidateConnection(t *testing.T) {
-	app, _ := New()
 	mockClient := &MockPostgreSQLClient{}
-	app.client = mockClient
+	app := New(mockClient)
 
 	mockClient.On("Ping", mock.Anything).Return(nil)
 
@@ -169,8 +175,7 @@ func TestApp_ValidateConnection(t *testing.T) {
 }
 
 func TestApp_ValidateConnectionNilClient(t *testing.T) {
-	app, _ := New()
-	app.client = nil
+	app := New(nil)
 
 	err := app.ValidateConnection(context.Background())
 	assert.Error(t, err)
@@ -178,9 +183,8 @@ func TestApp_ValidateConnectionNilClient(t *testing.T) {
 }
 
 func TestApp_ValidateConnectionPingError(t *testing.T) {
-	app, _ := New()
 	mockClient := &MockPostgreSQLClient{}
-	app.client = mockClient
+	app := New(mockClient)
 
 	// Mock ping failure and reconnection failure (no env vars set)
 	pingError := errors.New("ping failed")
@@ -193,9 +197,8 @@ func TestApp_ValidateConnectionPingError(t *testing.T) {
 }
 
 func TestApp_ListDatabases(t *testing.T) {
-	app, _ := New()
 	mockClient := &MockPostgreSQLClient{}
-	app.client = mockClient
+	app := New(mockClient)
 
 	expectedDatabases := []*DatabaseInfo{
 		{Name: "db1", Owner: "user1", Encoding: "UTF8"},
@@ -212,9 +215,8 @@ func TestApp_ListDatabases(t *testing.T) {
 }
 
 func TestApp_ListDatabasesConnectionError(t *testing.T) {
-	app, _ := New()
 	mockClient := &MockPostgreSQLClient{}
-	app.client = mockClient
+	app := New(mockClient)
 
 	expectedError := errors.New("connection error")
 	mockClient.On("Ping", mock.Anything).Return(expectedError)
@@ -229,9 +231,8 @@ func TestApp_ListDatabasesConnectionError(t *testing.T) {
 }
 
 func TestApp_GetCurrentDatabase(t *testing.T) {
-	app, _ := New()
 	mockClient := &MockPostgreSQLClient{}
-	app.client = mockClient
+	app := New(mockClient)
 
 	expectedDB := "testdb"
 
@@ -245,9 +246,8 @@ func TestApp_GetCurrentDatabase(t *testing.T) {
 }
 
 func TestApp_ListSchemas(t *testing.T) {
-	app, _ := New()
 	mockClient := &MockPostgreSQLClient{}
-	app.client = mockClient
+	app := New(mockClient)
 
 	expectedSchemas := []*SchemaInfo{
 		{Name: "public", Owner: "postgres"},
@@ -264,9 +264,8 @@ func TestApp_ListSchemas(t *testing.T) {
 }
 
 func TestApp_ListTables(t *testing.T) {
-	app, _ := New()
 	mockClient := &MockPostgreSQLClient{}
-	app.client = mockClient
+	app := New(mockClient)
 
 	expectedTables := []*TableInfo{
 		{Schema: "public", Name: "users", Type: "table", Owner: "user"},
@@ -287,9 +286,8 @@ func TestApp_ListTables(t *testing.T) {
 }
 
 func TestApp_ListTablesWithDefaultSchema(t *testing.T) {
-	app, _ := New()
 	mockClient := &MockPostgreSQLClient{}
-	app.client = mockClient
+	app := New(mockClient)
 
 	expectedTables := []*TableInfo{
 		{Schema: "public", Name: "users", Type: "table", Owner: "user"},
@@ -307,9 +305,8 @@ func TestApp_ListTablesWithDefaultSchema(t *testing.T) {
 }
 
 func TestApp_ListTablesWithNilOptions(t *testing.T) {
-	app, _ := New()
 	mockClient := &MockPostgreSQLClient{}
-	app.client = mockClient
+	app := New(mockClient)
 
 	expectedTables := []*TableInfo{
 		{Schema: "public", Name: "users", Type: "table", Owner: "user"},
@@ -325,9 +322,8 @@ func TestApp_ListTablesWithNilOptions(t *testing.T) {
 }
 
 func TestApp_ListTablesWithSize(t *testing.T) {
-	app, _ := New()
 	mockClient := &MockPostgreSQLClient{}
-	app.client = mockClient
+	app := New(mockClient)
 
 	tablesWithStats := []*TableInfo{
 		{
@@ -357,9 +353,8 @@ func TestApp_ListTablesWithSize(t *testing.T) {
 }
 
 func TestApp_DescribeTable(t *testing.T) {
-	app, _ := New()
 	mockClient := &MockPostgreSQLClient{}
-	app.client = mockClient
+	app := New(mockClient)
 
 	expectedColumns := []*ColumnInfo{
 		{Name: "id", DataType: "integer", IsNullable: false},
@@ -376,7 +371,7 @@ func TestApp_DescribeTable(t *testing.T) {
 }
 
 func TestApp_DescribeTableEmptyTableName(t *testing.T) {
-	app, _ := New()
+	app, _ := NewDefault()
 
 	columns, err := app.DescribeTable(context.Background(), "public", "")
 	assert.Error(t, err)
@@ -385,9 +380,8 @@ func TestApp_DescribeTableEmptyTableName(t *testing.T) {
 }
 
 func TestApp_DescribeTableDefaultSchema(t *testing.T) {
-	app, _ := New()
 	mockClient := &MockPostgreSQLClient{}
-	app.client = mockClient
+	app := New(mockClient)
 
 	expectedColumns := []*ColumnInfo{
 		{Name: "id", DataType: "integer", IsNullable: false},
@@ -403,9 +397,8 @@ func TestApp_DescribeTableDefaultSchema(t *testing.T) {
 }
 
 func TestApp_ExecuteQuery(t *testing.T) {
-	app, _ := New()
 	mockClient := &MockPostgreSQLClient{}
-	app.client = mockClient
+	app := New(mockClient)
 
 	expectedResult := &QueryResult{
 		Columns:  []string{"id", "name"},
@@ -427,9 +420,8 @@ func TestApp_ExecuteQuery(t *testing.T) {
 }
 
 func TestApp_ExecuteQueryWithLimit(t *testing.T) {
-	app, _ := New()
 	mockClient := &MockPostgreSQLClient{}
-	app.client = mockClient
+	app := New(mockClient)
 
 	originalResult := &QueryResult{
 		Columns:  []string{"id", "name"},
@@ -453,7 +445,7 @@ func TestApp_ExecuteQueryWithLimit(t *testing.T) {
 }
 
 func TestApp_ExecuteQueryNilOptions(t *testing.T) {
-	app, _ := New()
+	app, _ := NewDefault()
 
 	result, err := app.ExecuteQuery(context.Background(), nil)
 	assert.Error(t, err)
@@ -462,7 +454,7 @@ func TestApp_ExecuteQueryNilOptions(t *testing.T) {
 }
 
 func TestApp_ExecuteQueryEmptyQuery(t *testing.T) {
-	app, _ := New()
+	app, _ := NewDefault()
 
 	opts := &ExecuteQueryOptions{}
 
@@ -473,9 +465,8 @@ func TestApp_ExecuteQueryEmptyQuery(t *testing.T) {
 }
 
 func TestApp_ExplainQuery(t *testing.T) {
-	app, _ := New()
 	mockClient := &MockPostgreSQLClient{}
-	app.client = mockClient
+	app := New(mockClient)
 
 	expectedResult := &QueryResult{
 		Columns:  []string{"QUERY PLAN"},
@@ -493,7 +484,7 @@ func TestApp_ExplainQuery(t *testing.T) {
 }
 
 func TestApp_ExplainQueryEmptyQuery(t *testing.T) {
-	app, _ := New()
+	app, _ := NewDefault()
 
 	result, err := app.ExplainQuery(context.Background(), "")
 	assert.Error(t, err)
@@ -502,9 +493,8 @@ func TestApp_ExplainQueryEmptyQuery(t *testing.T) {
 }
 
 func TestApp_GetTableStats(t *testing.T) {
-	app, _ := New()
 	mockClient := &MockPostgreSQLClient{}
-	app.client = mockClient
+	app := New(mockClient)
 
 	expectedStats := &TableInfo{
 		Schema:   "public",
@@ -523,9 +513,8 @@ func TestApp_GetTableStats(t *testing.T) {
 }
 
 func TestApp_ListIndexes(t *testing.T) {
-	app, _ := New()
 	mockClient := &MockPostgreSQLClient{}
-	app.client = mockClient
+	app := New(mockClient)
 
 	expectedIndexes := []*IndexInfo{
 		{Name: "users_pkey", Table: "users", Columns: []string{"id"}, IsUnique: true, IsPrimary: true},
@@ -542,9 +531,8 @@ func TestApp_ListIndexes(t *testing.T) {
 }
 
 func TestApp_Connect_Success(t *testing.T) {
-	app, _ := New()
 	mockClient := &MockPostgreSQLClient{}
-	app.client = mockClient
+	app := New(mockClient)
 
 	connectionString := "postgres://user:pass@localhost/db"
 
@@ -558,7 +546,7 @@ func TestApp_Connect_Success(t *testing.T) {
 }
 
 func TestApp_Connect_EmptyString(t *testing.T) {
-	app, _ := New()
+	app, _ := NewDefault()
 
 	err := app.Connect(context.Background(), "")
 	assert.Error(t, err)
@@ -566,9 +554,8 @@ func TestApp_Connect_EmptyString(t *testing.T) {
 }
 
 func TestApp_Connect_ReconnectClosesExisting(t *testing.T) {
-	app, _ := New()
 	mockClient := &MockPostgreSQLClient{}
-	app.client = mockClient
+	app := New(mockClient)
 
 	connectionString := "postgres://user:pass@localhost/db"
 
@@ -583,9 +570,8 @@ func TestApp_Connect_ReconnectClosesExisting(t *testing.T) {
 }
 
 func TestApp_Connect_ConnectError(t *testing.T) {
-	app, _ := New()
 	mockClient := &MockPostgreSQLClient{}
-	app.client = mockClient
+	app := New(mockClient)
 
 	connectionString := "postgres://user:pass@localhost/db"
 	expectedError := errors.New("connection failed")
