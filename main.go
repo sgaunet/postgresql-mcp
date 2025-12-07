@@ -22,6 +22,9 @@ var version = "dev"
 // Error variables for static errors.
 var (
 	ErrInvalidConnectionParameters = errors.New("invalid connection parameters")
+	ErrHostRequired                = errors.New("host is required")
+	ErrUserRequired                = errors.New("user is required")
+	ErrDatabaseRequired            = errors.New("database is required")
 )
 
 // ConnectionParams represents individual database connection parameters.
@@ -39,13 +42,13 @@ type ConnectionParams struct {
 func buildConnectionString(params ConnectionParams) (string, error) {
 	// Validate required parameters
 	if params.Host == "" {
-		return "", errors.New("host is required")
+		return "", ErrHostRequired
 	}
 	if params.User == "" {
-		return "", errors.New("user is required")
+		return "", ErrUserRequired
 	}
 	if params.Database == "" {
-		return "", errors.New("database is required")
+		return "", ErrDatabaseRequired
 	}
 
 	// Set defaults
@@ -59,13 +62,13 @@ func buildConnectionString(params ConnectionParams) (string, error) {
 		sslMode = "prefer" // PostgreSQL default SSL mode
 	}
 
-	// Build connection string
+	// Build connection string using net.JoinHostPort pattern
+	hostPort := fmt.Sprintf("%s:%d", params.Host, port)
 	connStr := fmt.Sprintf(
-		"postgres://%s:%s@%s:%d/%s?sslmode=%s",
+		"postgres://%s:%s@%s/%s?sslmode=%s",
 		params.User,
 		params.Password,
-		params.Host,
-		port,
+		hostPort,
 		params.Database,
 		sslMode,
 	)
@@ -73,12 +76,112 @@ func buildConnectionString(params ConnectionParams) (string, error) {
 	return connStr, nil
 }
 
+// extractConnectionParams extracts connection parameters from args.
+func extractConnectionParams(args map[string]any) ConnectionParams {
+	params := ConnectionParams{
+		Host: "localhost", // Default
+	}
+
+	if host, ok := args["host"].(string); ok && host != "" {
+		params.Host = host
+	}
+
+	if portFloat, ok := args["port"].(float64); ok {
+		params.Port = int(portFloat)
+	}
+
+	if user, ok := args["user"].(string); ok {
+		params.User = user
+	}
+
+	if password, ok := args["password"].(string); ok {
+		params.Password = password
+	}
+
+	if database, ok := args["database"].(string); ok {
+		params.Database = database
+	}
+
+	if sslmode, ok := args["sslmode"].(string); ok {
+		params.SSLMode = sslmode
+	}
+
+	return params
+}
+
+// getConnectionString determines the connection string from args.
+func getConnectionString(
+	args map[string]any,
+	debugLogger *slog.Logger,
+) (string, error) {
+	// Check if full connection URL is provided
+	if connURL, ok := args["connection_url"].(string); ok && connURL != "" {
+		debugLogger.Debug("Using provided connection URL")
+		return connURL, nil
+	}
+
+	// Build connection string from individual parameters
+	params := extractConnectionParams(args)
+	connectionString, err := buildConnectionString(params)
+	if err != nil {
+		debugLogger.Error("Failed to build connection string", "error", err)
+		return "", fmt.Errorf("invalid connection parameters: %w", err)
+	}
+
+	debugLogger.Debug("Built connection string from parameters",
+		"host", params.Host, "port", params.Port, "database", params.Database)
+	return connectionString, nil
+}
+
+// handleConnectDatabaseRequest handles the connect_database tool request.
+func handleConnectDatabaseRequest(
+	args map[string]any,
+	appInstance *app.App,
+	debugLogger *slog.Logger,
+) (*mcp.CallToolResult, error) {
+	debugLogger.Debug("Received connect_database tool request", "args", args)
+
+	connectionString, err := getConnectionString(args, debugLogger)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	// Attempt to connect
+	if err := appInstance.Connect(connectionString); err != nil {
+		debugLogger.Error("Failed to connect to database", "error", err)
+		return mcp.NewToolResultError(fmt.Sprintf("Failed to connect to database: %v", err)), nil
+	}
+
+	// Get current database name to confirm connection
+	dbName, err := appInstance.GetCurrentDatabase()
+	if err != nil {
+		debugLogger.Warn("Connected but failed to get database name", "error", err)
+		dbName = "unknown"
+	}
+
+	debugLogger.Info("Successfully connected to database", "database", dbName)
+
+	response := map[string]any{
+		"status":   "connected",
+		"database": dbName,
+		"message":  "Successfully connected to database: " + dbName,
+	}
+
+	jsonData, err := json.Marshal(response)
+	if err != nil {
+		debugLogger.Error("Failed to marshal connection response", "error", err)
+		return mcp.NewToolResultError("Failed to format connection response"), nil
+	}
+
+	return mcp.NewToolResultText(string(jsonData)), nil
+}
+
 // setupConnectDatabaseTool creates and registers the connect_database tool.
 func setupConnectDatabaseTool(s *server.MCPServer, appInstance *app.App, debugLogger *slog.Logger) {
 	connectDBTool := mcp.NewTool("connect_database",
-		mcp.WithDescription("Connect to a PostgreSQL database using connection parameters or connection URL"),
+		mcp.WithDescription("Connect to a PostgreSQL database using connection parameters or URL"),
 		mcp.WithString("connection_url",
-			mcp.Description("Full PostgreSQL connection URL (postgres://user:password@host:port/dbname?sslmode=mode). If provided, individual parameters are ignored."),
+			mcp.Description("Full PostgreSQL connection URL. If provided, individual parameters are ignored."),
 		),
 		mcp.WithString("host",
 			mcp.Description("Database host (default: localhost)"),
@@ -101,85 +204,7 @@ func setupConnectDatabaseTool(s *server.MCPServer, appInstance *app.App, debugLo
 	)
 
 	s.AddTool(connectDBTool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		args := request.GetArguments()
-		debugLogger.Debug("Received connect_database tool request", "args", args)
-
-		var connectionString string
-
-		// Check if full connection URL is provided
-		if connURL, ok := args["connection_url"].(string); ok && connURL != "" {
-			connectionString = connURL
-			debugLogger.Debug("Using provided connection URL")
-		} else {
-			// Build connection string from individual parameters
-			params := ConnectionParams{}
-
-			if host, ok := args["host"].(string); ok && host != "" {
-				params.Host = host
-			} else {
-				params.Host = "localhost" // Default
-			}
-
-			if portFloat, ok := args["port"].(float64); ok {
-				params.Port = int(portFloat)
-			}
-			// Port will default to 5432 in buildConnectionString if 0
-
-			if user, ok := args["user"].(string); ok {
-				params.User = user
-			}
-
-			if password, ok := args["password"].(string); ok {
-				params.Password = password
-			}
-
-			if database, ok := args["database"].(string); ok {
-				params.Database = database
-			}
-
-			if sslmode, ok := args["sslmode"].(string); ok {
-				params.SSLMode = sslmode
-			}
-
-			// Validate and build connection string
-			var err error
-			connectionString, err = buildConnectionString(params)
-			if err != nil {
-				debugLogger.Error("Failed to build connection string", "error", err)
-				return mcp.NewToolResultError(fmt.Sprintf("Invalid connection parameters: %v", err)), nil
-			}
-
-			debugLogger.Debug("Built connection string from parameters", "host", params.Host, "port", params.Port, "database", params.Database)
-		}
-
-		// Attempt to connect
-		if err := appInstance.Connect(connectionString); err != nil {
-			debugLogger.Error("Failed to connect to database", "error", err)
-			return mcp.NewToolResultError(fmt.Sprintf("Failed to connect to database: %v", err)), nil
-		}
-
-		// Get current database name to confirm connection
-		dbName, err := appInstance.GetCurrentDatabase()
-		if err != nil {
-			debugLogger.Warn("Connected but failed to get database name", "error", err)
-			dbName = "unknown"
-		}
-
-		debugLogger.Info("Successfully connected to database", "database", dbName)
-
-		response := map[string]interface{}{
-			"status":   "connected",
-			"database": dbName,
-			"message":  fmt.Sprintf("Successfully connected to database: %s", dbName),
-		}
-
-		jsonData, err := json.Marshal(response)
-		if err != nil {
-			debugLogger.Error("Failed to marshal connection response", "error", err)
-			return mcp.NewToolResultError("Failed to format connection response"), nil
-		}
-
-		return mcp.NewToolResultText(string(jsonData)), nil
+		return handleConnectDatabaseRequest(request.GetArguments(), appInstance, debugLogger)
 	})
 }
 
@@ -289,7 +314,7 @@ func setupListTablesTool(s *server.MCPServer, appInstance *app.App, debugLogger 
 
 // handleTableSchemaToolRequest handles tool requests that require table and optional schema parameters.
 func handleTableSchemaToolRequest(
-	args map[string]interface{},
+	args map[string]any,
 	debugLogger *slog.Logger,
 	toolName string,
 ) (string, string, error) {
@@ -311,7 +336,7 @@ func handleTableSchemaToolRequest(
 }
 
 // marshalToJSON converts data to JSON and handles errors.
-func marshalToJSON(data interface{}, debugLogger *slog.Logger, errorMsg string) ([]byte, error) {
+func marshalToJSON(data any, debugLogger *slog.Logger, errorMsg string) ([]byte, error) {
 	jsonData, err := json.Marshal(data)
 	if err != nil {
 		debugLogger.Error("Failed to marshal data to JSON", "error", err, "context", errorMsg)
@@ -325,8 +350,8 @@ type TableToolConfig struct {
 	Name        string
 	Description string
 	TableDesc   string
-	Operation   func(appInstance *app.App, schema, table string) (interface{}, error)
-	SuccessMsg  func(result interface{}, schema, table string) (string, []any)
+	Operation   func(appInstance *app.App, schema, table string) (any, error)
+	SuccessMsg  func(result any, schema, table string) (string, []any)
 	ErrorMsg    string
 }
 
@@ -375,10 +400,10 @@ func setupDescribeTableTool(s *server.MCPServer, appInstance *app.App, debugLogg
 		Name:        "describe_table",
 		Description: "Get detailed information about a table's structure (columns, types, constraints)",
 		TableDesc:   "Table name to describe",
-		Operation: func(appInstance *app.App, schema, table string) (interface{}, error) {
+		Operation: func(appInstance *app.App, schema, table string) (any, error) {
 			return appInstance.DescribeTable(schema, table)
 		},
-		SuccessMsg: func(result interface{}, schema, table string) (string, []any) {
+		SuccessMsg: func(result any, schema, table string) (string, []any) {
 			columns, ok := result.([]*app.ColumnInfo)
 			if !ok {
 				return "Error processing result", []any{"error", "type assertion failed"}
@@ -449,10 +474,10 @@ func setupListIndexesTool(s *server.MCPServer, appInstance *app.App, debugLogger
 		Name:        "list_indexes",
 		Description: "List indexes for a specific table",
 		TableDesc:   "Table name to list indexes for",
-		Operation: func(appInstance *app.App, schema, table string) (interface{}, error) {
+		Operation: func(appInstance *app.App, schema, table string) (any, error) {
 			return appInstance.ListIndexes(schema, table)
 		},
-		SuccessMsg: func(result interface{}, schema, table string) (string, []any) {
+		SuccessMsg: func(result any, schema, table string) (string, []any) {
 			indexes, ok := result.([]*app.IndexInfo)
 			if !ok {
 				return "Error processing result", []any{"error", "type assertion failed"}

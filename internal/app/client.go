@@ -358,16 +358,16 @@ func validateQuery(query string) error {
 }
 
 // processRows processes query result rows and handles type conversion.
-func processRows(rows *sql.Rows) ([][]interface{}, error) {
+func processRows(rows *sql.Rows) ([][]any, error) {
 	columns, err := rows.Columns()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get columns: %w", err)
 	}
 
-	var result [][]interface{}
+	var result [][]any
 	for rows.Next() {
-		values := make([]interface{}, len(columns))
-		valuePtrs := make([]interface{}, len(columns))
+		values := make([]any, len(columns))
+		valuePtrs := make([]any, len(columns))
 		for i := range values {
 			valuePtrs[i] = &values[i]
 		}
@@ -389,7 +389,7 @@ func processRows(rows *sql.Rows) ([][]interface{}, error) {
 }
 
 // ExecuteQuery executes a SELECT query and returns the results.
-func (c *PostgreSQLClientImpl) ExecuteQuery(query string, args ...interface{}) (*QueryResult, error) {
+func (c *PostgreSQLClientImpl) ExecuteQuery(query string, args ...any) (*QueryResult, error) {
 	if c.db == nil {
 		return nil, ErrNoDatabaseConnection
 	}
@@ -425,7 +425,7 @@ func (c *PostgreSQLClientImpl) ExecuteQuery(query string, args ...interface{}) (
 }
 
 // ExplainQuery returns the execution plan for a query.
-func (c *PostgreSQLClientImpl) ExplainQuery(query string, args ...interface{}) (*QueryResult, error) {
+func (c *PostgreSQLClientImpl) ExplainQuery(query string, args ...any) (*QueryResult, error) {
 	if c.db == nil {
 		return nil, ErrNoDatabaseConnection
 	}

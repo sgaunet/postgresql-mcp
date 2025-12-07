@@ -15,7 +15,8 @@ var (
 	ErrQueryRequired      = errors.New("query is required")
 	ErrInvalidQuery       = errors.New("only SELECT and WITH queries are allowed")
 	ErrNoConnectionString = errors.New(
-		"no database connection string provided. Either call connect_database tool or set POSTGRES_URL/DATABASE_URL environment variable",
+		"no database connection string provided. " +
+			"Either call connect_database tool or set POSTGRES_URL/DATABASE_URL environment variable",
 	)
 	ErrNoDatabaseConnection = errors.New("no database connection")
 	ErrTableNotFound        = errors.New("table does not exist")
@@ -69,9 +70,9 @@ type IndexInfo struct {
 
 // QueryResult represents the result of a query execution.
 type QueryResult struct {
-	Columns  []string        `json:"columns"`
-	Rows     [][]interface{} `json:"rows"`
-	RowCount int             `json:"row_count"`
+	Columns  []string `json:"columns"`
+	Rows     [][]any  `json:"rows"`
+	RowCount int      `json:"row_count"`
 }
 
 // ConnectionManager handles database connection operations.
@@ -99,8 +100,8 @@ type TableExplorer interface {
 
 // QueryExecutor handles query operations.
 type QueryExecutor interface {
-	ExecuteQuery(query string, args ...interface{}) (*QueryResult, error)
-	ExplainQuery(query string, args ...interface{}) (*QueryResult, error)
+	ExecuteQuery(query string, args ...any) (*QueryResult, error)
+	ExplainQuery(query string, args ...any) (*QueryResult, error)
 }
 
 // PostgreSQLClient interface combines all database operations.

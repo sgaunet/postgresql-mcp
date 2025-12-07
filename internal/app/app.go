@@ -21,9 +21,9 @@ type ListTablesOptions struct {
 
 // ExecuteQueryOptions represents options for executing queries.
 type ExecuteQueryOptions struct {
-	Query string        `json:"query"`
-	Args  []interface{} `json:"args,omitempty"`
-	Limit int           `json:"limit,omitempty"`
+	Query string `json:"query"`
+	Args  []any  `json:"args,omitempty"`
+	Limit int    `json:"limit,omitempty"`
 }
 
 // App represents the main application structure.
@@ -281,7 +281,7 @@ func (a *App) GetCurrentDatabase() (string, error) {
 }
 
 // ExplainQuery returns the execution plan for a query.
-func (a *App) ExplainQuery(query string, args ...interface{}) (*QueryResult, error) {
+func (a *App) ExplainQuery(query string, args ...any) (*QueryResult, error) {
 	if err := a.ensureConnection(); err != nil {
 		return nil, err
 	}
