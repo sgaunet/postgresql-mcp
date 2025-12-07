@@ -32,17 +32,16 @@ type App struct {
 	logger *slog.Logger
 }
 
-// New creates a new App instance and attempts to connect to the database.
+// New creates a new App instance without establishing a connection.
+// Use Connect() method or connect_database tool to establish connection.
 func New() (*App, error) {
 	app := &App{
 		client: NewPostgreSQLClient(),
 		logger: logger.NewLogger("info"),
 	}
 
-	// Attempt initial connection
-	if err := app.tryConnect(); err != nil {
-		app.logger.Warn("Could not connect to database on startup, will retry on first tool request", "error", err)
-	}
+	// Note: Connection is now explicit via Connect() or connect_database tool
+	// Environment variables are still supported as fallback via tryConnect()
 
 	return app, nil
 }
@@ -50,6 +49,34 @@ func New() (*App, error) {
 // SetLogger sets the logger for the app.
 func (a *App) SetLogger(logger *slog.Logger) {
 	a.logger = logger
+}
+
+// Connect establishes a database connection with the provided connection string.
+// If a connection already exists, it will be closed before establishing a new one.
+func (a *App) Connect(connectionString string) error {
+	if connectionString == "" {
+		return ErrNoConnectionString
+	}
+
+	// Close existing connection if any
+	if a.client != nil {
+		if err := a.client.Ping(); err == nil {
+			// Connection exists and is active, close it first
+			if closeErr := a.client.Close(); closeErr != nil {
+				a.logger.Warn("Failed to close existing connection", "error", closeErr)
+			}
+		}
+	}
+
+	a.logger.Debug("Connecting to PostgreSQL database")
+
+	if err := a.client.Connect(connectionString); err != nil {
+		a.logger.Error("Failed to connect to database", "error", err)
+		return fmt.Errorf("failed to connect: %w", err)
+	}
+
+	a.logger.Info("Successfully connected to PostgreSQL database")
+	return nil
 }
 
 // Disconnect closes the database connection.
@@ -280,9 +307,10 @@ func (a *App) ValidateConnection() error {
 	return a.ensureConnection()
 }
 
-// tryConnect attempts to connect to the database using environment variables.
+// tryConnect attempts to connect using environment variables as a fallback mechanism.
+// Returns ErrNoConnectionString if no environment variables are set.
 func (a *App) tryConnect() error {
-	// Try environment variables
+	// Try environment variables as fallback
 	connectionString := os.Getenv("POSTGRES_URL")
 	if connectionString == "" {
 		connectionString = os.Getenv("DATABASE_URL")
@@ -292,15 +320,7 @@ func (a *App) tryConnect() error {
 		return ErrNoConnectionString
 	}
 
-	a.logger.Debug("Connecting to PostgreSQL database")
-
-	if err := a.client.Connect(connectionString); err != nil {
-		a.logger.Error("Failed to connect to database", "error", err)
-		return fmt.Errorf("failed to connect: %w", err)
-	}
-
-	a.logger.Info("Successfully connected to PostgreSQL database")
-	return nil
+	return a.Connect(connectionString)
 }
 
 // ensureConnection checks if the database connection is valid and attempts to reconnect if needed.

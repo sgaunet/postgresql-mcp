@@ -75,11 +75,8 @@ func setupTestContainer(t *testing.T) (*postgres.PostgresContainer, string, func
 	return postgresContainer, connStr, cleanup
 }
 
-func setupTestDatabase(t *testing.T) (*sql.DB, func()) {
+func setupTestDatabase(t *testing.T) (*sql.DB, string, func()) {
 	_, connectionString, containerCleanup := setupTestContainer(t)
-
-	// Set environment variable for the app to use
-	os.Setenv("POSTGRES_URL", connectionString)
 
 	// Connect to PostgreSQL
 	db, err := sql.Open("postgres", connectionString)
@@ -134,24 +131,23 @@ func setupTestDatabase(t *testing.T) (*sql.DB, func()) {
 	cleanup := func() {
 		_, _ = db.ExecContext(context.Background(), fmt.Sprintf("DROP SCHEMA IF EXISTS %s CASCADE", testSchema))
 		db.Close()
-		os.Unsetenv("POSTGRES_URL")
 		containerCleanup() // Clean up container
 	}
 
-	return db, cleanup
+	return db, connectionString, cleanup
 }
 
 func TestIntegration_App_Connect(t *testing.T) {
 	_, connectionString, cleanup := setupTestContainer(t)
 	defer cleanup()
 
-	// Set environment variable for connection
-	os.Setenv("POSTGRES_URL", connectionString)
-	defer os.Unsetenv("POSTGRES_URL")
-
 	appInstance, err := app.New()
 	require.NoError(t, err)
 	defer appInstance.Disconnect()
+
+	// Test explicit connection with connection string
+	err = appInstance.Connect(connectionString)
+	require.NoError(t, err)
 
 	// Test that we can get current database
 	dbName, err := appInstance.GetCurrentDatabase()
@@ -159,30 +155,38 @@ func TestIntegration_App_Connect(t *testing.T) {
 	assert.NotEmpty(t, dbName)
 }
 
-func TestIntegration_App_ConnectWithDatabaseURL(t *testing.T) {
+func TestIntegration_App_ConnectWithEnvironmentVariable(t *testing.T) {
 	_, connectionString, cleanup := setupTestContainer(t)
 	defer cleanup()
 
-	// Test with DATABASE_URL environment variable
-	os.Setenv("DATABASE_URL", connectionString)
-	defer os.Unsetenv("DATABASE_URL")
+	// Test with POSTGRES_URL environment variable (backward compatibility via tryConnect)
+	os.Setenv("POSTGRES_URL", connectionString)
+	defer os.Unsetenv("POSTGRES_URL")
 
 	appInstance, err := app.New()
 	require.NoError(t, err)
 	defer appInstance.Disconnect()
 
-	// Test that connection works
+	// Explicitly call ensureConnection which will trigger tryConnect() fallback
 	err = appInstance.ValidateConnection()
 	assert.NoError(t, err)
+
+	// Verify connection works
+	dbName, err := appInstance.GetCurrentDatabase()
+	assert.NoError(t, err)
+	assert.NotEmpty(t, dbName)
 }
 
 func TestIntegration_App_ListDatabases(t *testing.T) {
-	_, cleanup := setupTestDatabase(t)
+	_, connectionString, cleanup := setupTestDatabase(t)
 	defer cleanup()
 
 	appInstance, err := app.New()
 	require.NoError(t, err)
 	defer appInstance.Disconnect()
+
+	err = appInstance.Connect(connectionString)
+	require.NoError(t, err)
 
 	databases, err := appInstance.ListDatabases()
 	assert.NoError(t, err)
@@ -201,12 +205,15 @@ func TestIntegration_App_ListDatabases(t *testing.T) {
 }
 
 func TestIntegration_App_ListSchemas(t *testing.T) {
-	_, cleanup := setupTestDatabase(t)
+	_, connectionString, cleanup := setupTestDatabase(t)
 	defer cleanup()
 
 	appInstance, err := app.New()
 	require.NoError(t, err)
 	defer appInstance.Disconnect()
+
+	err = appInstance.Connect(connectionString)
+	require.NoError(t, err)
 
 	schemas, err := appInstance.ListSchemas()
 	assert.NoError(t, err)
@@ -223,12 +230,15 @@ func TestIntegration_App_ListSchemas(t *testing.T) {
 }
 
 func TestIntegration_App_ListTables(t *testing.T) {
-	_, cleanup := setupTestDatabase(t)
+	_, connectionString, cleanup := setupTestDatabase(t)
 	defer cleanup()
 
 	appInstance, err := app.New()
 	require.NoError(t, err)
 	defer appInstance.Disconnect()
+
+	err = appInstance.Connect(connectionString)
+	require.NoError(t, err)
 
 	// List tables in test schema
 	listOpts := &app.ListTablesOptions{
@@ -253,12 +263,15 @@ func TestIntegration_App_ListTables(t *testing.T) {
 }
 
 func TestIntegration_App_ListTablesWithSize(t *testing.T) {
-	_, cleanup := setupTestDatabase(t)
+	_, connectionString, cleanup := setupTestDatabase(t)
 	defer cleanup()
 
 	appInstance, err := app.New()
 	require.NoError(t, err)
 	defer appInstance.Disconnect()
+
+	err = appInstance.Connect(connectionString)
+	require.NoError(t, err)
 
 	// List tables with size information
 	listOpts := &app.ListTablesOptions{
@@ -280,12 +293,15 @@ func TestIntegration_App_ListTablesWithSize(t *testing.T) {
 }
 
 func TestIntegration_App_DescribeTable(t *testing.T) {
-	_, cleanup := setupTestDatabase(t)
+	_, connectionString, cleanup := setupTestDatabase(t)
 	defer cleanup()
 
 	appInstance, err := app.New()
 	require.NoError(t, err)
 	defer appInstance.Disconnect()
+
+	err = appInstance.Connect(connectionString)
+	require.NoError(t, err)
 
 	columns, err := appInstance.DescribeTable("test_mcp_schema", "test_users")
 	assert.NoError(t, err)
@@ -322,12 +338,15 @@ func TestIntegration_App_DescribeTable(t *testing.T) {
 }
 
 func TestIntegration_App_ExecuteQuery(t *testing.T) {
-	_, cleanup := setupTestDatabase(t)
+	_, connectionString, cleanup := setupTestDatabase(t)
 	defer cleanup()
 
 	appInstance, err := app.New()
 	require.NoError(t, err)
 	defer appInstance.Disconnect()
+
+	err = appInstance.Connect(connectionString)
+	require.NoError(t, err)
 
 	// Test simple SELECT query
 	queryOpts := &app.ExecuteQueryOptions{
@@ -352,12 +371,15 @@ func TestIntegration_App_ExecuteQuery(t *testing.T) {
 }
 
 func TestIntegration_App_ExecuteQueryWithLimit(t *testing.T) {
-	_, cleanup := setupTestDatabase(t)
+	_, connectionString, cleanup := setupTestDatabase(t)
 	defer cleanup()
 
 	appInstance, err := app.New()
 	require.NoError(t, err)
 	defer appInstance.Disconnect()
+
+	err = appInstance.Connect(connectionString)
+	require.NoError(t, err)
 
 	// Test query with limit
 	queryOpts := &app.ExecuteQueryOptions{
@@ -375,12 +397,15 @@ func TestIntegration_App_ExecuteQueryWithLimit(t *testing.T) {
 }
 
 func TestIntegration_App_ListIndexes(t *testing.T) {
-	_, cleanup := setupTestDatabase(t)
+	_, connectionString, cleanup := setupTestDatabase(t)
 	defer cleanup()
 
 	appInstance, err := app.New()
 	require.NoError(t, err)
 	defer appInstance.Disconnect()
+
+	err = appInstance.Connect(connectionString)
+	require.NoError(t, err)
 
 	indexes, err := appInstance.ListIndexes("test_mcp_schema", "test_users")
 	assert.NoError(t, err)
@@ -412,12 +437,15 @@ func TestIntegration_App_ListIndexes(t *testing.T) {
 }
 
 func TestIntegration_App_ExplainQuery(t *testing.T) {
-	_, cleanup := setupTestDatabase(t)
+	_, connectionString, cleanup := setupTestDatabase(t)
 	defer cleanup()
 
 	appInstance, err := app.New()
 	require.NoError(t, err)
 	defer appInstance.Disconnect()
+
+	err = appInstance.Connect(connectionString)
+	require.NoError(t, err)
 
 	// Test EXPLAIN query
 	result, err := appInstance.ExplainQuery("SELECT * FROM test_mcp_schema.test_users WHERE active = true")
@@ -430,12 +458,15 @@ func TestIntegration_App_ExplainQuery(t *testing.T) {
 }
 
 func TestIntegration_App_GetTableStats(t *testing.T) {
-	_, cleanup := setupTestDatabase(t)
+	_, connectionString, cleanup := setupTestDatabase(t)
 	defer cleanup()
 
 	appInstance, err := app.New()
 	require.NoError(t, err)
 	defer appInstance.Disconnect()
+
+	err = appInstance.Connect(connectionString)
+	require.NoError(t, err)
 
 	stats, err := appInstance.GetTableStats("test_mcp_schema", "test_users")
 	assert.NoError(t, err)
@@ -512,12 +543,15 @@ func BenchmarkIntegration_ListTables(b *testing.B) {
 
 	// Use a testing.T wrapper for setup functions
 	t := &testing.T{}
-	_, cleanup := setupTestDatabase(t)
+	_, connectionString, cleanup := setupTestDatabase(t)
 	defer cleanup()
 
 	appInstance, err := app.New()
 	require.NoError(b, err)
 	defer appInstance.Disconnect()
+
+	err = appInstance.Connect(connectionString)
+	require.NoError(b, err)
 
 	listOpts := &app.ListTablesOptions{
 		Schema: "test_mcp_schema",
@@ -539,12 +573,15 @@ func BenchmarkIntegration_ExecuteQuery(b *testing.B) {
 
 	// Use a testing.T wrapper for setup functions
 	t := &testing.T{}
-	_, cleanup := setupTestDatabase(t)
+	_, connectionString, cleanup := setupTestDatabase(t)
 	defer cleanup()
 
 	appInstance, err := app.New()
 	require.NoError(b, err)
 	defer appInstance.Disconnect()
+
+	err = appInstance.Connect(connectionString)
+	require.NoError(b, err)
 
 	queryOpts := &app.ExecuteQueryOptions{
 		Query: "SELECT COUNT(*) FROM test_mcp_schema.test_users",

@@ -24,6 +24,165 @@ var (
 	ErrInvalidConnectionParameters = errors.New("invalid connection parameters")
 )
 
+// ConnectionParams represents individual database connection parameters.
+type ConnectionParams struct {
+	Host     string
+	Port     int
+	User     string
+	Password string
+	Database string
+	SSLMode  string
+}
+
+// buildConnectionString builds a PostgreSQL connection URL from individual parameters.
+// Returns the connection string or an error if required parameters are missing.
+func buildConnectionString(params ConnectionParams) (string, error) {
+	// Validate required parameters
+	if params.Host == "" {
+		return "", errors.New("host is required")
+	}
+	if params.User == "" {
+		return "", errors.New("user is required")
+	}
+	if params.Database == "" {
+		return "", errors.New("database is required")
+	}
+
+	// Set defaults
+	port := params.Port
+	if port == 0 {
+		port = 5432 // PostgreSQL default port
+	}
+
+	sslMode := params.SSLMode
+	if sslMode == "" {
+		sslMode = "prefer" // PostgreSQL default SSL mode
+	}
+
+	// Build connection string
+	connStr := fmt.Sprintf(
+		"postgres://%s:%s@%s:%d/%s?sslmode=%s",
+		params.User,
+		params.Password,
+		params.Host,
+		port,
+		params.Database,
+		sslMode,
+	)
+
+	return connStr, nil
+}
+
+// setupConnectDatabaseTool creates and registers the connect_database tool.
+func setupConnectDatabaseTool(s *server.MCPServer, appInstance *app.App, debugLogger *slog.Logger) {
+	connectDBTool := mcp.NewTool("connect_database",
+		mcp.WithDescription("Connect to a PostgreSQL database using connection parameters or connection URL"),
+		mcp.WithString("connection_url",
+			mcp.Description("Full PostgreSQL connection URL (postgres://user:password@host:port/dbname?sslmode=mode). If provided, individual parameters are ignored."),
+		),
+		mcp.WithString("host",
+			mcp.Description("Database host (default: localhost)"),
+		),
+		mcp.WithNumber("port",
+			mcp.Description("Database port (default: 5432)"),
+		),
+		mcp.WithString("user",
+			mcp.Description("Database user"),
+		),
+		mcp.WithString("password",
+			mcp.Description("Database password"),
+		),
+		mcp.WithString("database",
+			mcp.Description("Database name"),
+		),
+		mcp.WithString("sslmode",
+			mcp.Description("SSL mode: disable, allow, prefer, require, verify-ca, verify-full (default: prefer)"),
+		),
+	)
+
+	s.AddTool(connectDBTool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := request.GetArguments()
+		debugLogger.Debug("Received connect_database tool request", "args", args)
+
+		var connectionString string
+
+		// Check if full connection URL is provided
+		if connURL, ok := args["connection_url"].(string); ok && connURL != "" {
+			connectionString = connURL
+			debugLogger.Debug("Using provided connection URL")
+		} else {
+			// Build connection string from individual parameters
+			params := ConnectionParams{}
+
+			if host, ok := args["host"].(string); ok && host != "" {
+				params.Host = host
+			} else {
+				params.Host = "localhost" // Default
+			}
+
+			if portFloat, ok := args["port"].(float64); ok {
+				params.Port = int(portFloat)
+			}
+			// Port will default to 5432 in buildConnectionString if 0
+
+			if user, ok := args["user"].(string); ok {
+				params.User = user
+			}
+
+			if password, ok := args["password"].(string); ok {
+				params.Password = password
+			}
+
+			if database, ok := args["database"].(string); ok {
+				params.Database = database
+			}
+
+			if sslmode, ok := args["sslmode"].(string); ok {
+				params.SSLMode = sslmode
+			}
+
+			// Validate and build connection string
+			var err error
+			connectionString, err = buildConnectionString(params)
+			if err != nil {
+				debugLogger.Error("Failed to build connection string", "error", err)
+				return mcp.NewToolResultError(fmt.Sprintf("Invalid connection parameters: %v", err)), nil
+			}
+
+			debugLogger.Debug("Built connection string from parameters", "host", params.Host, "port", params.Port, "database", params.Database)
+		}
+
+		// Attempt to connect
+		if err := appInstance.Connect(connectionString); err != nil {
+			debugLogger.Error("Failed to connect to database", "error", err)
+			return mcp.NewToolResultError(fmt.Sprintf("Failed to connect to database: %v", err)), nil
+		}
+
+		// Get current database name to confirm connection
+		dbName, err := appInstance.GetCurrentDatabase()
+		if err != nil {
+			debugLogger.Warn("Connected but failed to get database name", "error", err)
+			dbName = "unknown"
+		}
+
+		debugLogger.Info("Successfully connected to database", "database", dbName)
+
+		response := map[string]interface{}{
+			"status":   "connected",
+			"database": dbName,
+			"message":  fmt.Sprintf("Successfully connected to database: %s", dbName),
+		}
+
+		jsonData, err := json.Marshal(response)
+		if err != nil {
+			debugLogger.Error("Failed to marshal connection response", "error", err)
+			return mcp.NewToolResultError("Failed to format connection response"), nil
+		}
+
+		return mcp.NewToolResultText(string(jsonData)), nil
+	})
+}
+
 // setupListDatabasesTool creates and registers the list_databases tool.
 func setupListDatabasesTool(s *server.MCPServer, appInstance *app.App, debugLogger *slog.Logger) {
 	listDBTool := mcp.NewTool("list_databases",
@@ -409,13 +568,17 @@ OPTIONS:
     -h, --help     Show this help message
     -v, --version  Show version information
 
-ENVIRONMENT VARIABLES:
-    POSTGRES_URL   PostgreSQL connection URL (format: postgres://user:password@host:port/dbname?sslmode=prefer)
-    DATABASE_URL   Alternative to POSTGRES_URL
+ENVIRONMENT VARIABLES (OPTIONAL):
+    POSTGRES_URL   PostgreSQL connection URL (fallback if connect_database tool not used)
+    DATABASE_URL   Alternative to POSTGRES_URL (fallback)
+
+    Note: Environment variables are now optional. Use the connect_database tool
+    for explicit connection management.
 
 DESCRIPTION:
     This MCP server provides the following tools for PostgreSQL integration:
 
+    • connect_database    - Connect to a PostgreSQL database (use this first!)
     • list_databases      - List all databases on the server
     • list_schemas        - List schemas in the current database
     • list_tables         - List tables in a schema with optional metadata
@@ -438,7 +601,7 @@ EXAMPLES:
     # Show version
     postgresql-mcp -v
 
-For more information, visit: https://github.com/sylvain/postgresql-mcp
+For more information, visit: https://github.com/sgaunet/postgresql-mcp
 `, version)
 }
 
@@ -484,7 +647,9 @@ func initializeApp() (*app.App, *slog.Logger) {
 }
 
 // registerAllTools registers all available tools with the MCP server.
+// connect_database is registered first as it establishes the connection needed by other tools.
 func registerAllTools(s *server.MCPServer, appInstance *app.App, debugLogger *slog.Logger) {
+	setupConnectDatabaseTool(s, appInstance, debugLogger)
 	setupListDatabasesTool(s, appInstance, debugLogger)
 	setupListSchemasTool(s, appInstance, debugLogger)
 	setupListTablesTool(s, appInstance, debugLogger)
