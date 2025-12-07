@@ -40,11 +40,11 @@ func (c *PostgreSQLClientImpl) Connect(connectionString string) error {
 
 // Close closes the database connection.
 func (c *PostgreSQLClientImpl) Close() error {
-	if c.db != nil {
-		if err := c.db.Close(); err != nil {
-			return fmt.Errorf("failed to close database: %w", err)
-		}
+	if c.db == nil {
 		return nil
+	}
+	if err := c.db.Close(); err != nil {
+		return fmt.Errorf("failed to close database: %w", err)
 	}
 	return nil
 }
