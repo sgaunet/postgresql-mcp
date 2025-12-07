@@ -269,7 +269,7 @@ func setupListTablesTool(s *server.MCPServer, appInstance *app.App, debugLogger 
 	listTablesTool := mcp.NewTool("list_tables",
 		mcp.WithDescription("List tables in a specific schema"),
 		mcp.WithString("schema",
-			mcp.Description("Schema name to list tables from (default: public)"),
+			mcp.Description(fmt.Sprintf("Schema name to list tables from (default: %s)", app.DefaultSchema)),
 		),
 		mcp.WithBoolean("include_size",
 			mcp.Description("Include table size and row count information (default: false)"),
@@ -326,7 +326,7 @@ func handleTableSchemaToolRequest(
 	}
 
 	// Extract schema (optional)
-	schema := "public"
+	schema := app.DefaultSchema
 	if schemaArg, ok := args["schema"].(string); ok && schemaArg != "" {
 		schema = schemaArg
 	}
@@ -364,7 +364,7 @@ func setupTableTool(s *server.MCPServer, appInstance *app.App, debugLogger *slog
 			mcp.Description(config.TableDesc),
 		),
 		mcp.WithString("schema",
-			mcp.Description("Schema name (default: public)"),
+			mcp.Description(fmt.Sprintf("Schema name (default: %s)", app.DefaultSchema)),
 		),
 	)
 
@@ -539,7 +539,7 @@ func setupGetTableStatsTool(s *server.MCPServer, appInstance *app.App, debugLogg
 			mcp.Description("Table name to get statistics for"),
 		),
 		mcp.WithString("schema",
-			mcp.Description("Schema name (default: public)"),
+			mcp.Description(fmt.Sprintf("Schema name (default: %s)", app.DefaultSchema)),
 		),
 	)
 
@@ -555,7 +555,7 @@ func setupGetTableStatsTool(s *server.MCPServer, appInstance *app.App, debugLogg
 		}
 
 		// Extract schema (optional)
-		schema := "public"
+		schema := app.DefaultSchema
 		if schemaArg, ok := args["schema"].(string); ok && schemaArg != "" {
 			schema = schemaArg
 		}
