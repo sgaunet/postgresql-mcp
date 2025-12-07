@@ -532,3 +532,62 @@ func TestApp_ListIndexes(t *testing.T) {
 	assert.Equal(t, expectedIndexes, indexes)
 	mockClient.AssertExpectations(t)
 }
+
+func TestApp_Connect_Success(t *testing.T) {
+	app, _ := New()
+	mockClient := &MockPostgreSQLClient{}
+	app.client = mockClient
+
+	connectionString := "postgres://user:pass@localhost/db"
+
+	// Mock expectations
+	mockClient.On("Ping").Return(errors.New("not connected")) // No existing connection
+	mockClient.On("Connect", connectionString).Return(nil)
+
+	err := app.Connect(connectionString)
+	assert.NoError(t, err)
+	mockClient.AssertExpectations(t)
+}
+
+func TestApp_Connect_EmptyString(t *testing.T) {
+	app, _ := New()
+
+	err := app.Connect("")
+	assert.Error(t, err)
+	assert.Equal(t, ErrNoConnectionString, err)
+}
+
+func TestApp_Connect_ReconnectClosesExisting(t *testing.T) {
+	app, _ := New()
+	mockClient := &MockPostgreSQLClient{}
+	app.client = mockClient
+
+	connectionString := "postgres://user:pass@localhost/db"
+
+	// Mock expectations for reconnection scenario
+	mockClient.On("Ping").Return(nil).Once()      // Existing connection is alive
+	mockClient.On("Close").Return(nil).Once()     // Close existing
+	mockClient.On("Connect", connectionString).Return(nil)
+
+	err := app.Connect(connectionString)
+	assert.NoError(t, err)
+	mockClient.AssertExpectations(t)
+}
+
+func TestApp_Connect_ConnectError(t *testing.T) {
+	app, _ := New()
+	mockClient := &MockPostgreSQLClient{}
+	app.client = mockClient
+
+	connectionString := "postgres://user:pass@localhost/db"
+	expectedError := errors.New("connection failed")
+
+	// Mock expectations
+	mockClient.On("Ping").Return(errors.New("not connected")) // No existing connection
+	mockClient.On("Connect", connectionString).Return(expectedError)
+
+	err := app.Connect(connectionString)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to connect")
+	mockClient.AssertExpectations(t)
+}

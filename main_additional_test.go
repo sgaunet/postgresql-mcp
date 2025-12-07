@@ -270,3 +270,96 @@ func TestEnvironmentVariableHandling(t *testing.T) {
 
 	assert.Equal(t, "postgres://test2@localhost/db2", connectionString)
 }
+
+func TestBuildConnectionString_AllParameters(t *testing.T) {
+	params := ConnectionParams{
+		Host:     "localhost",
+		Port:     5432,
+		User:     "testuser",
+		Password: "testpass",
+		Database: "testdb",
+		SSLMode:  "disable",
+	}
+
+	connStr, err := buildConnectionString(params)
+	assert.NoError(t, err)
+	assert.Equal(t, "postgres://testuser:testpass@localhost:5432/testdb?sslmode=disable", connStr)
+}
+
+func TestBuildConnectionString_Defaults(t *testing.T) {
+	params := ConnectionParams{
+		Host:     "localhost",
+		User:     "testuser",
+		Password: "testpass",
+		Database: "testdb",
+		// Port and SSLMode should use defaults
+	}
+
+	connStr, err := buildConnectionString(params)
+	assert.NoError(t, err)
+	assert.Equal(t, "postgres://testuser:testpass@localhost:5432/testdb?sslmode=prefer", connStr)
+}
+
+func TestBuildConnectionString_MissingHost(t *testing.T) {
+	params := ConnectionParams{
+		User:     "testuser",
+		Password: "testpass",
+		Database: "testdb",
+	}
+
+	_, err := buildConnectionString(params)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "host is required")
+}
+
+func TestBuildConnectionString_MissingUser(t *testing.T) {
+	params := ConnectionParams{
+		Host:     "localhost",
+		Password: "testpass",
+		Database: "testdb",
+	}
+
+	_, err := buildConnectionString(params)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "user is required")
+}
+
+func TestBuildConnectionString_MissingDatabase(t *testing.T) {
+	params := ConnectionParams{
+		Host:     "localhost",
+		User:     "testuser",
+		Password: "testpass",
+	}
+
+	_, err := buildConnectionString(params)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "database is required")
+}
+
+func TestBuildConnectionString_EmptyPassword(t *testing.T) {
+	params := ConnectionParams{
+		Host:     "localhost",
+		User:     "testuser",
+		Password: "",
+		Database: "testdb",
+	}
+
+	connStr, err := buildConnectionString(params)
+	assert.NoError(t, err)
+	assert.Equal(t, "postgres://testuser:@localhost:5432/testdb?sslmode=prefer", connStr)
+}
+
+func TestBuildConnectionString_CustomPort(t *testing.T) {
+	params := ConnectionParams{
+		Host:     "dbserver",
+		Port:     5433,
+		User:     "admin",
+		Password: "secret",
+		Database: "mydb",
+		SSLMode:  "require",
+	}
+
+	connStr, err := buildConnectionString(params)
+	assert.NoError(t, err)
+	assert.Equal(t, "postgres://admin:secret@dbserver:5433/mydb?sslmode=require", connStr)
+}
