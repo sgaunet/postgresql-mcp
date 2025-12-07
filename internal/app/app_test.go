@@ -59,6 +59,14 @@ func (m *MockPostgreSQLClient) ListTables(schema string) ([]*TableInfo, error) {
 	return nil, args.Error(1)
 }
 
+func (m *MockPostgreSQLClient) ListTablesWithStats(schema string) ([]*TableInfo, error) {
+	args := m.Called(schema)
+	if tables, ok := args.Get(0).([]*TableInfo); ok {
+		return tables, args.Error(1)
+	}
+	return nil, args.Error(1)
+}
+
 func (m *MockPostgreSQLClient) DescribeTable(schema, table string) ([]*ColumnInfo, error) {
 	args := m.Called(schema, table)
 	if columns, ok := args.Get(0).([]*ColumnInfo); ok {
@@ -320,15 +328,15 @@ func TestApp_ListTablesWithSize(t *testing.T) {
 	mockClient := &MockPostgreSQLClient{}
 	app.client = mockClient
 
-	initialTables := []*TableInfo{
-		{Schema: "public", Name: "users", Type: "table", Owner: "user"},
-	}
-
-	tableStats := &TableInfo{
-		Schema:   "public",
-		Name:     "users",
-		RowCount: 1000,
-		Size:     "5MB",
+	tablesWithStats := []*TableInfo{
+		{
+			Schema:   "public",
+			Name:     "users",
+			Type:     "table",
+			Owner:    "postgres",
+			RowCount: 1000,
+			Size:     "5MB",
+		},
 	}
 
 	opts := &ListTablesOptions{
@@ -337,8 +345,7 @@ func TestApp_ListTablesWithSize(t *testing.T) {
 	}
 
 	mockClient.On("Ping").Return(nil)
-	mockClient.On("ListTables", "public").Return(initialTables, nil)
-	mockClient.On("GetTableStats", "public", "users").Return(tableStats, nil)
+	mockClient.On("ListTablesWithStats", "public").Return(tablesWithStats, nil)
 
 	tables, err := app.ListTables(opts)
 	assert.NoError(t, err)

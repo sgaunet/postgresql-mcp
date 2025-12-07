@@ -93,6 +93,7 @@ type DatabaseExplorer interface {
 // TableExplorer handles table-level operations.
 type TableExplorer interface {
 	ListTables(schema string) ([]*TableInfo, error)
+	ListTablesWithStats(schema string) ([]*TableInfo, error)
 	DescribeTable(schema, table string) ([]*ColumnInfo, error)
 	GetTableStats(schema, table string) (*TableInfo, error)
 	ListIndexes(schema, table string) ([]*IndexInfo, error)

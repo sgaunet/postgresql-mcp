@@ -138,22 +138,21 @@ func (a *App) ListTables(opts *ListTablesOptions) ([]*TableInfo, error) {
 
 	a.logger.Debug("Listing tables", "schema", schema)
 
-	tables, err := a.client.ListTables(schema)
-	if err != nil {
-		a.logger.Error("Failed to list tables", "error", err, "schema", schema)
-		return nil, fmt.Errorf("failed to list tables: %w", err)
-	}
+	var tables []*TableInfo
+	var err error
 
-	// Get additional stats if requested
+	// Use optimized query when stats are requested to avoid N+1 query pattern
 	if opts != nil && opts.IncludeSize {
-		for _, table := range tables {
-			stats, err := a.client.GetTableStats(table.Schema, table.Name)
-			if err != nil {
-				a.logger.Warn("Failed to get table stats", "error", err, "table", table.Name)
-				continue
-			}
-			table.RowCount = stats.RowCount
-			table.Size = stats.Size
+		tables, err = a.client.ListTablesWithStats(schema)
+		if err != nil {
+			a.logger.Error("Failed to list tables with stats", "error", err, "schema", schema)
+			return nil, fmt.Errorf("failed to list tables with stats: %w", err)
+		}
+	} else {
+		tables, err = a.client.ListTables(schema)
+		if err != nil {
+			a.logger.Error("Failed to list tables", "error", err, "schema", schema)
+			return nil, fmt.Errorf("failed to list tables: %w", err)
 		}
 	}
 
