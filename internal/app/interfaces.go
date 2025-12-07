@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 )
@@ -77,32 +78,32 @@ type QueryResult struct {
 
 // ConnectionManager handles database connection operations.
 type ConnectionManager interface {
-	Connect(connectionString string) error
+	Connect(ctx context.Context, connectionString string) error
 	Close() error
-	Ping() error
+	Ping(ctx context.Context) error
 	GetDB() *sql.DB
 }
 
 // DatabaseExplorer handles database-level operations.
 type DatabaseExplorer interface {
-	ListDatabases() ([]*DatabaseInfo, error)
-	GetCurrentDatabase() (string, error)
-	ListSchemas() ([]*SchemaInfo, error)
+	ListDatabases(ctx context.Context) ([]*DatabaseInfo, error)
+	GetCurrentDatabase(ctx context.Context) (string, error)
+	ListSchemas(ctx context.Context) ([]*SchemaInfo, error)
 }
 
 // TableExplorer handles table-level operations.
 type TableExplorer interface {
-	ListTables(schema string) ([]*TableInfo, error)
-	ListTablesWithStats(schema string) ([]*TableInfo, error)
-	DescribeTable(schema, table string) ([]*ColumnInfo, error)
-	GetTableStats(schema, table string) (*TableInfo, error)
-	ListIndexes(schema, table string) ([]*IndexInfo, error)
+	ListTables(ctx context.Context, schema string) ([]*TableInfo, error)
+	ListTablesWithStats(ctx context.Context, schema string) ([]*TableInfo, error)
+	DescribeTable(ctx context.Context, schema, table string) ([]*ColumnInfo, error)
+	GetTableStats(ctx context.Context, schema, table string) (*TableInfo, error)
+	ListIndexes(ctx context.Context, schema, table string) ([]*IndexInfo, error)
 }
 
 // QueryExecutor handles query operations.
 type QueryExecutor interface {
-	ExecuteQuery(query string, args ...any) (*QueryResult, error)
-	ExplainQuery(query string, args ...any) (*QueryResult, error)
+	ExecuteQuery(ctx context.Context, query string, args ...any) (*QueryResult, error)
+	ExplainQuery(ctx context.Context, query string, args ...any) (*QueryResult, error)
 }
 
 // PostgreSQLClient interface combines all database operations.

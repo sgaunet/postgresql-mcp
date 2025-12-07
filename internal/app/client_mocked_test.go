@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"database/sql"
 	"testing"
 
@@ -64,7 +65,7 @@ func TestPostgreSQLClient_ConnectValidation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := client.Connect(tt.connectionStr)
+			err := client.Connect(context.Background(), tt.connectionStr)
 			if tt.expectError {
 				assert.Error(t, err)
 			} else {
@@ -131,7 +132,7 @@ func TestPostgreSQLClient_QueryValidationLogic(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Test the validation logic that would happen in ExecuteQuery
 			// by calling it without a real database connection
-			_, err := client.ExecuteQuery(tt.query)
+			_, err := client.ExecuteQuery(context.Background(), tt.query)
 
 			if tt.shouldAllow {
 				// Should fail with connection error, not validation error
@@ -156,7 +157,7 @@ func TestPostgreSQLClient_StateManagement(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Test Ping on fresh client
-	err = client.Ping()
+	err = client.Ping(context.Background())
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "no database connection")
 
@@ -171,55 +172,55 @@ func TestPostgreSQLClient_ErrorScenarios(t *testing.T) {
 
 	// Test all methods that check for db == nil
 	t.Run("ListDatabases", func(t *testing.T) {
-		_, err := client.ListDatabases()
+		_, err := client.ListDatabases(context.Background())
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "no database connection")
 	})
 
 	t.Run("GetCurrentDatabase", func(t *testing.T) {
-		_, err := client.GetCurrentDatabase()
+		_, err := client.GetCurrentDatabase(context.Background())
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "no database connection")
 	})
 
 	t.Run("ListSchemas", func(t *testing.T) {
-		_, err := client.ListSchemas()
+		_, err := client.ListSchemas(context.Background())
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "no database connection")
 	})
 
 	t.Run("ListTables", func(t *testing.T) {
-		_, err := client.ListTables("public")
+		_, err := client.ListTables(context.Background(), "public")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "no database connection")
 	})
 
 	t.Run("DescribeTable", func(t *testing.T) {
-		_, err := client.DescribeTable("public", "users")
+		_, err := client.DescribeTable(context.Background(), "public", "users")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "no database connection")
 	})
 
 	t.Run("GetTableStats", func(t *testing.T) {
-		_, err := client.GetTableStats("public", "users")
+		_, err := client.GetTableStats(context.Background(), "public", "users")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "no database connection")
 	})
 
 	t.Run("ListIndexes", func(t *testing.T) {
-		_, err := client.ListIndexes("public", "users")
+		_, err := client.ListIndexes(context.Background(), "public", "users")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "no database connection")
 	})
 
 	t.Run("ExecuteQuery", func(t *testing.T) {
-		_, err := client.ExecuteQuery("SELECT 1")
+		_, err := client.ExecuteQuery(context.Background(), "SELECT 1")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "no database connection")
 	})
 
 	t.Run("ExplainQuery", func(t *testing.T) {
-		_, err := client.ExplainQuery("SELECT 1")
+		_, err := client.ExplainQuery(context.Background(), "SELECT 1")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "no database connection")
 	})
@@ -243,15 +244,15 @@ func TestPostgreSQLClient_SchemaDefaults(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// All these will fail with "no database connection" but exercise the schema defaulting logic
-			_, err := client.GetTableStats(tt.schema, tt.table)
+			_, err := client.GetTableStats(context.Background(), tt.schema, tt.table)
 			assert.Error(t, err)
 			assert.Contains(t, err.Error(), "no database connection")
 
-			_, err = client.ListIndexes(tt.schema, tt.table)
+			_, err = client.ListIndexes(context.Background(), tt.schema, tt.table)
 			assert.Error(t, err)
 			assert.Contains(t, err.Error(), "no database connection")
 
-			_, err = client.DescribeTable(tt.schema, tt.table)
+			_, err = client.DescribeTable(context.Background(), tt.schema, tt.table)
 			assert.Error(t, err)
 			assert.Contains(t, err.Error(), "no database connection")
 		})

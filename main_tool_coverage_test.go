@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
@@ -136,7 +137,7 @@ func TestInitializeAppCoverage(t *testing.T) {
 	assert.NotNil(t, logger)
 
 	// Test that the app is properly initialized
-	err := app.ValidateConnection()
+	err := app.ValidateConnection(context.Background())
 	assert.Error(t, err) // Should error because no connection established
 
 	// Test setting logger
