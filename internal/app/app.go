@@ -276,6 +276,10 @@ func (a *App) ExecuteQuery(ctx context.Context, opts *ExecuteQueryOptions) (*Que
 
 	result, err := a.client.ExecuteQuery(ctx, opts.Query, opts.Args...)
 	if err != nil {
+		if errors.Is(err, ErrQueryTooLong) {
+			a.logSecurityEvent("query_too_long", opts.Query, err)
+			return nil, fmt.Errorf("query rejected: %w", err)
+		}
 		if errors.Is(err, ErrInvalidQuery) {
 			a.logSecurityEvent("invalid_query", opts.Query, err)
 			return nil, fmt.Errorf("query rejected: %w", err)
@@ -325,6 +329,10 @@ func (a *App) ExplainQuery(ctx context.Context, query string, args ...any) (*Que
 
 	result, err := a.client.ExplainQuery(ctx, query, args...)
 	if err != nil {
+		if errors.Is(err, ErrQueryTooLong) {
+			a.logSecurityEvent("query_too_long", query, err)
+			return nil, fmt.Errorf("query rejected: %w", err)
+		}
 		if errors.Is(err, ErrInvalidQuery) {
 			a.logSecurityEvent("invalid_query", query, err)
 			return nil, fmt.Errorf("query rejected: %w", err)

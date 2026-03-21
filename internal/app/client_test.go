@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -505,6 +506,10 @@ func TestValidateQuery(t *testing.T) {
 		{name: "two SELECTs", query: "SELECT 1; SELECT 2", wantErr: ErrMultiStatementQuery},
 		{name: "trailing semicolon", query: "SELECT 1;", wantErr: ErrMultiStatementQuery},
 		{name: "semicolon with spaces", query: "SELECT 1 ; DROP TABLE users", wantErr: ErrMultiStatementQuery},
+
+		// Query too long
+		{name: "query exceeds max length", query: "SELECT " + strings.Repeat("x", MaxQueryLength), wantErr: ErrQueryTooLong},
+		{name: "query at max length", query: "SELECT " + strings.Repeat("x", MaxQueryLength-7), wantNoErr: true},
 	}
 
 	for _, tt := range tests {
