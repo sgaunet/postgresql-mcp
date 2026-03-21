@@ -512,7 +512,7 @@ func (c *PostgreSQLClientImpl) ExplainQuery(ctx context.Context, query string, a
 	}
 
 	// Construct the EXPLAIN query
-	explainQuery := "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " + query
+	explainQuery := "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " + query //nolint:gosec // query is validated by validateQuery above (SELECT/WITH only)
 
 	rows, err := c.db.QueryContext(ctx, explainQuery, args...)
 	if err != nil {
