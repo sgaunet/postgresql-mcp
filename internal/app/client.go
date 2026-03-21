@@ -16,6 +16,11 @@ const (
 
 	// commentTokenLen is the length of SQL comment tokens (/* */ --).
 	commentTokenLen = 2
+
+	// MaxQueryLength is the maximum allowed query size in bytes (1MB).
+	// Queries exceeding this limit are rejected before any processing
+	// to prevent memory exhaustion and DoS attacks.
+	MaxQueryLength = 1 << 20
 )
 
 // injectReadOnlyOption appends default_transaction_read_only=on to the connection string
@@ -632,6 +637,9 @@ func containsSemicolonOutsideLiterals(query string) bool {
 // and rejects multi-statement queries.
 // Comments are stripped before validation to prevent comment-based injection.
 func validateQuery(query string) error {
+	if len(query) > MaxQueryLength {
+		return ErrQueryTooLong
+	}
 	stripped := stripComments(query)
 	trimmed := strings.TrimSpace(strings.ToUpper(stripped))
 	if !strings.HasPrefix(trimmed, "SELECT") && !strings.HasPrefix(trimmed, "WITH") {
