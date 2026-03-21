@@ -535,52 +535,17 @@ func setupExplainQueryTool(s *server.MCPServer, appInstance *app.App, debugLogge
 
 // setupGetTableStatsTool creates and registers the get_table_stats tool.
 func setupGetTableStatsTool(s *server.MCPServer, appInstance *app.App, debugLogger *slog.Logger) {
-	getTableStatsTool := mcp.NewTool("get_table_stats",
-		mcp.WithDescription("Get detailed statistics for a specific table"),
-		mcp.WithString("table",
-			mcp.Required(),
-			mcp.Description("Table name to get statistics for"),
-		),
-		mcp.WithString("schema",
-			mcp.Description(fmt.Sprintf("Schema name (default: %s)", app.DefaultSchema)),
-		),
-	)
-
-	s.AddTool(getTableStatsTool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		args := request.GetArguments()
-		debugLogger.Debug("Received get_table_stats tool request", "args", args)
-
-		// Extract table name (required)
-		table, ok := args["table"].(string)
-		if !ok || table == "" {
-			debugLogger.Error("table name is missing or not a string", "value", args["table"])
-			return mcp.NewToolResultError("table must be a non-empty string"), nil
-		}
-
-		// Extract schema (optional)
-		schema := app.DefaultSchema
-		if schemaArg, ok := args["schema"].(string); ok && schemaArg != "" {
-			schema = schemaArg
-		}
-
-		debugLogger.Debug("Processing get_table_stats request", "schema", schema, "table", table)
-
-		// Get table stats
-		stats, err := appInstance.GetTableStats(ctx, schema, table)
-		if err != nil {
-			debugLogger.Error("Failed to get table stats", "error", err, "schema", schema, "table", table)
-			return mcp.NewToolResultError(fmt.Sprintf("Failed to get table stats: %v", err)), nil
-		}
-
-		// Convert to JSON
-		jsonData, err := json.Marshal(stats)
-		if err != nil {
-			debugLogger.Error("Failed to marshal table stats to JSON", "error", err)
-			return mcp.NewToolResultError("Failed to format table stats response"), nil
-		}
-
-		debugLogger.Info("Successfully retrieved table stats", "schema", schema, "table", table)
-		return mcp.NewToolResultText(string(jsonData)), nil
+	setupTableTool(s, appInstance, debugLogger, TableToolConfig{
+		Name:        "get_table_stats",
+		Description: "Get detailed statistics for a specific table",
+		TableDesc:   "Table name to get statistics for",
+		Operation: func(ctx context.Context, appInstance *app.App, schema, table string) (any, error) {
+			return appInstance.GetTableStats(ctx, schema, table)
+		},
+		SuccessMsg: func(_ any, schema, table string) (string, []any) {
+			return "Successfully retrieved table stats", []any{"schema", schema, "table", table}
+		},
+		ErrorMsg: "get table stats",
 	})
 }
 
