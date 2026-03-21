@@ -721,3 +721,39 @@ func BenchmarkIntegration_ExecuteQuery(b *testing.B) {
 		}
 	}
 }
+
+func TestIntegration_ReadOnlyEnforcement(t *testing.T) {
+	_, connectionString, cleanup := setupTestContainer(t)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
+	defer cancel()
+
+	// Connect via the client which injects read-only option
+	client := app.NewPostgreSQLClient()
+	err := client.Connect(ctx, connectionString)
+	require.NoError(t, err)
+	defer client.Close()
+
+	// SELECT should work in read-only mode
+	result, err := client.ExecuteQuery(ctx, "SELECT 1 AS num")
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+
+	// Mutating statements via raw DB should be rejected by PostgreSQL read-only mode
+	db := client.GetDB()
+	require.NotNil(t, db)
+
+	_, err = db.ExecContext(ctx, "CREATE TABLE read_only_test (id INT)")
+	assert.Error(t, err, "CREATE TABLE should be rejected in read-only mode")
+	assert.Contains(t, err.Error(), "read-only")
+
+	// Multi-statement injection should be rejected by validation
+	_, err = client.ExecuteQuery(ctx, "SELECT 1; DROP TABLE pg_catalog.pg_class")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "multi-statement")
+
+	// EXPLAIN ANALYZE on SELECT should still work in read-only mode
+	_, err = client.ExplainQuery(ctx, "SELECT 1")
+	assert.NoError(t, err)
+}
