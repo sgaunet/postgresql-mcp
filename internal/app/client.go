@@ -6,7 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/lib/pq"
 )
@@ -21,6 +24,12 @@ const (
 	// Queries exceeding this limit are rejected before any processing
 	// to prevent memory exhaustion and DoS attacks.
 	MaxQueryLength = 1 << 20
+
+	// Connection pool defaults for the MCP server use case.
+	defaultMaxOpenConns    = 10
+	defaultMaxIdleConns    = 5
+	defaultConnMaxLifetime = time.Hour
+	defaultConnMaxIdleTime = 10 * time.Minute
 )
 
 // injectReadOnlyOption appends default_transaction_read_only=on to the connection string
@@ -79,15 +88,47 @@ func NewPostgreSQLClient() *PostgreSQLClientImpl {
 	return &PostgreSQLClientImpl{}
 }
 
+// envIntOrDefault returns the integer value of an environment variable,
+// or the default value if the variable is not set or cannot be parsed.
+func envIntOrDefault(key string, defaultVal int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return defaultVal
+}
+
+// poolConfig returns connection pool settings from environment variables,
+// falling back to sensible defaults for the MCP server use case.
+func poolConfig() (int, int, time.Duration, time.Duration) {
+	maxOpen := envIntOrDefault("POSTGRES_MCP_MAX_OPEN_CONNS", defaultMaxOpenConns)
+	maxIdle := envIntOrDefault("POSTGRES_MCP_MAX_IDLE_CONNS", defaultMaxIdleConns)
+	lifetimeSec := envIntOrDefault("POSTGRES_MCP_CONN_MAX_LIFETIME", int(defaultConnMaxLifetime.Seconds()))
+	idleTimeSec := envIntOrDefault("POSTGRES_MCP_CONN_MAX_IDLE_TIME", int(defaultConnMaxIdleTime.Seconds()))
+	return maxOpen, maxIdle, time.Duration(lifetimeSec) * time.Second, time.Duration(idleTimeSec) * time.Second
+}
+
 // Connect establishes a connection to the PostgreSQL database.
 // The connection is configured as read-only at the PostgreSQL session level
 // to provide defense-in-depth against SQL injection attacks.
+// Pool settings can be overridden via environment variables:
+//   - POSTGRES_MCP_MAX_OPEN_CONNS (default: 10)
+//   - POSTGRES_MCP_MAX_IDLE_CONNS (default: 5)
+//   - POSTGRES_MCP_CONN_MAX_LIFETIME (seconds, default: 3600)
+//   - POSTGRES_MCP_CONN_MAX_IDLE_TIME (seconds, default: 600)
 func (c *PostgreSQLClientImpl) Connect(ctx context.Context, connectionString string) error {
 	readOnlyConnStr := injectReadOnlyOption(connectionString)
 	db, err := sql.Open("postgres", readOnlyConnStr)
 	if err != nil {
 		return fmt.Errorf("failed to open database connection: %w", err)
 	}
+
+	maxOpen, maxIdle, maxLifetime, maxIdleTime := poolConfig()
+	db.SetMaxOpenConns(maxOpen)
+	db.SetMaxIdleConns(maxIdle)
+	db.SetConnMaxLifetime(maxLifetime)
+	db.SetConnMaxIdleTime(maxIdleTime)
 
 	if err := db.PingContext(ctx); err != nil {
 		_ = db.Close()
