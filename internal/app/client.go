@@ -262,7 +262,11 @@ func (c *PostgreSQLClientImpl) ListTablesWithStats(ctx context.Context, schema s
 	// This handles newly created tables where pg_stat hasn't been updated yet
 	for _, table := range tables {
 		if table.RowCount == 0 && table.Type == "table" {
-			countQuery := `SELECT COUNT(*) FROM "` + table.Schema + `"."` + table.Name + `"`
+			// Use pq.QuoteIdentifier for SQL-safe identifier escaping to prevent
+			// SQL injection via malicious schema or table names.
+			countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s.%s",
+				pq.QuoteIdentifier(table.Schema),
+				pq.QuoteIdentifier(table.Name))
 			var actualCount int64
 			if err := c.db.QueryRowContext(ctx, countQuery).Scan(&actualCount); err != nil {
 				// Log warning but don't fail the entire operation
@@ -353,8 +357,11 @@ func (c *PostgreSQLClientImpl) GetTableStats(ctx context.Context, schema, table 
 	// If statistics are not available or show 0 rows, fall back to actual count
 	// This is useful for newly created tables where pg_stat hasn't been updated
 	if !rowCount.Valid || rowCount.Int64 == 0 {
-		// Use string concatenation instead of fmt.Sprintf for security
-		actualCountQuery := `SELECT COUNT(*) FROM "` + schema + `"."` + table + `"`
+		// Use pq.QuoteIdentifier for SQL-safe identifier escaping to prevent
+		// SQL injection via malicious schema or table names.
+		actualCountQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s.%s",
+			pq.QuoteIdentifier(schema),
+			pq.QuoteIdentifier(table))
 		var actualCount int64
 		err := c.db.QueryRowContext(ctx, actualCountQuery).Scan(&actualCount)
 		if err != nil {
