@@ -116,7 +116,7 @@ func (a *App) Disconnect() error {
 // ListDatabases returns a list of all databases.
 func (a *App) ListDatabases(ctx context.Context) ([]*DatabaseInfo, error) {
 	if err := a.ensureConnection(ctx); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to list databases: %w", err)
 	}
 
 	a.logger.Debug("Listing databases")
@@ -134,7 +134,7 @@ func (a *App) ListDatabases(ctx context.Context) ([]*DatabaseInfo, error) {
 // ListSchemas returns a list of schemas in the current database.
 func (a *App) ListSchemas(ctx context.Context) ([]*SchemaInfo, error) {
 	if err := a.ensureConnection(ctx); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to list schemas: %w", err)
 	}
 
 	a.logger.Debug("Listing schemas")
@@ -152,7 +152,7 @@ func (a *App) ListSchemas(ctx context.Context) ([]*SchemaInfo, error) {
 // ListTables returns a list of tables in the specified schema.
 func (a *App) ListTables(ctx context.Context, opts *ListTablesOptions) ([]*TableInfo, error) {
 	if err := a.ensureConnection(ctx); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to list tables: %w", err)
 	}
 
 	schema := DefaultSchema
@@ -187,7 +187,7 @@ func (a *App) ListTables(ctx context.Context, opts *ListTablesOptions) ([]*Table
 // DescribeTable returns detailed information about a table's structure.
 func (a *App) DescribeTable(ctx context.Context, schema, table string) ([]*ColumnInfo, error) {
 	if err := a.ensureConnection(ctx); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to describe table: %w", err)
 	}
 
 	if table == "" {
@@ -213,7 +213,7 @@ func (a *App) DescribeTable(ctx context.Context, schema, table string) ([]*Colum
 // GetTableStats returns statistics for a specific table.
 func (a *App) GetTableStats(ctx context.Context, schema, table string) (*TableInfo, error) {
 	if err := a.ensureConnection(ctx); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get table stats: %w", err)
 	}
 
 	if table == "" {
@@ -239,7 +239,7 @@ func (a *App) GetTableStats(ctx context.Context, schema, table string) (*TableIn
 // ListIndexes returns a list of indexes for the specified table.
 func (a *App) ListIndexes(ctx context.Context, schema, table string) ([]*IndexInfo, error) {
 	if err := a.ensureConnection(ctx); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to list indexes: %w", err)
 	}
 
 	if table == "" {
@@ -265,7 +265,7 @@ func (a *App) ListIndexes(ctx context.Context, schema, table string) ([]*IndexIn
 // ExecuteQuery executes a read-only query and returns the results.
 func (a *App) ExecuteQuery(ctx context.Context, opts *ExecuteQueryOptions) (*QueryResult, error) {
 	if err := a.ensureConnection(ctx); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to execute query: %w", err)
 	}
 
 	if opts == nil || opts.Query == "" {
@@ -305,7 +305,7 @@ func (a *App) ExecuteQuery(ctx context.Context, opts *ExecuteQueryOptions) (*Que
 // GetCurrentDatabase returns the name of the current database.
 func (a *App) GetCurrentDatabase(ctx context.Context) (string, error) {
 	if err := a.ensureConnection(ctx); err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to get current database: %w", err)
 	}
 
 	dbName, err := a.client.GetCurrentDatabase(ctx)
@@ -318,7 +318,7 @@ func (a *App) GetCurrentDatabase(ctx context.Context) (string, error) {
 // ExplainQuery returns the execution plan for a query.
 func (a *App) ExplainQuery(ctx context.Context, query string, args ...any) (*QueryResult, error) {
 	if err := a.ensureConnection(ctx); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to explain query: %w", err)
 	}
 
 	if query == "" {
