@@ -33,10 +33,10 @@ func (m *MockPostgreSQLClient) Ping(ctx context.Context) error {
 
 func (m *MockPostgreSQLClient) ListDatabases(ctx context.Context) ([]*DatabaseInfo, error) {
 	args := m.Called(ctx)
-	if databases, ok := args.Get(0).([]*DatabaseInfo); ok {
-		return databases, args.Error(1)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
 	}
-	return nil, args.Error(1)
+	return args.Get(0).([]*DatabaseInfo), args.Error(1)
 }
 
 func (m *MockPostgreSQLClient) GetCurrentDatabase(ctx context.Context) (string, error) {
@@ -46,74 +46,74 @@ func (m *MockPostgreSQLClient) GetCurrentDatabase(ctx context.Context) (string, 
 
 func (m *MockPostgreSQLClient) ListSchemas(ctx context.Context) ([]*SchemaInfo, error) {
 	args := m.Called(ctx)
-	if schemas, ok := args.Get(0).([]*SchemaInfo); ok {
-		return schemas, args.Error(1)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
 	}
-	return nil, args.Error(1)
+	return args.Get(0).([]*SchemaInfo), args.Error(1)
 }
 
 func (m *MockPostgreSQLClient) ListTables(ctx context.Context, schema string) ([]*TableInfo, error) {
 	args := m.Called(ctx, schema)
-	if tables, ok := args.Get(0).([]*TableInfo); ok {
-		return tables, args.Error(1)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
 	}
-	return nil, args.Error(1)
+	return args.Get(0).([]*TableInfo), args.Error(1)
 }
 
 func (m *MockPostgreSQLClient) ListTablesWithStats(ctx context.Context, schema string) ([]*TableInfo, error) {
 	args := m.Called(ctx, schema)
-	if tables, ok := args.Get(0).([]*TableInfo); ok {
-		return tables, args.Error(1)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
 	}
-	return nil, args.Error(1)
+	return args.Get(0).([]*TableInfo), args.Error(1)
 }
 
 func (m *MockPostgreSQLClient) DescribeTable(ctx context.Context, schema, table string) ([]*ColumnInfo, error) {
 	args := m.Called(ctx, schema, table)
-	if columns, ok := args.Get(0).([]*ColumnInfo); ok {
-		return columns, args.Error(1)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
 	}
-	return nil, args.Error(1)
+	return args.Get(0).([]*ColumnInfo), args.Error(1)
 }
 
 func (m *MockPostgreSQLClient) GetTableStats(ctx context.Context, schema, table string) (*TableInfo, error) {
 	args := m.Called(ctx, schema, table)
-	if stats, ok := args.Get(0).(*TableInfo); ok {
-		return stats, args.Error(1)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
 	}
-	return nil, args.Error(1)
+	return args.Get(0).(*TableInfo), args.Error(1)
 }
 
 func (m *MockPostgreSQLClient) ListIndexes(ctx context.Context, schema, table string) ([]*IndexInfo, error) {
 	args := m.Called(ctx, schema, table)
-	if indexes, ok := args.Get(0).([]*IndexInfo); ok {
-		return indexes, args.Error(1)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
 	}
-	return nil, args.Error(1)
+	return args.Get(0).([]*IndexInfo), args.Error(1)
 }
 
-func (m *MockPostgreSQLClient) ExecuteQuery(ctx context.Context, query string, args ...interface{}) (*QueryResult, error) {
-	mockArgs := m.Called(ctx, query, args)
-	if result, ok := mockArgs.Get(0).(*QueryResult); ok {
-		return result, mockArgs.Error(1)
+func (m *MockPostgreSQLClient) ExecuteQuery(ctx context.Context, query string, queryArgs ...any) (*QueryResult, error) {
+	mockArgs := m.Called(ctx, query, queryArgs)
+	if mockArgs.Get(0) == nil {
+		return nil, mockArgs.Error(1)
 	}
-	return nil, mockArgs.Error(1)
+	return mockArgs.Get(0).(*QueryResult), mockArgs.Error(1)
 }
 
-func (m *MockPostgreSQLClient) ExplainQuery(ctx context.Context, query string, args ...interface{}) (*QueryResult, error) {
-	mockArgs := m.Called(ctx, query, args)
-	if result, ok := mockArgs.Get(0).(*QueryResult); ok {
-		return result, mockArgs.Error(1)
+func (m *MockPostgreSQLClient) ExplainQuery(ctx context.Context, query string, queryArgs ...any) (*QueryResult, error) {
+	mockArgs := m.Called(ctx, query, queryArgs)
+	if mockArgs.Get(0) == nil {
+		return nil, mockArgs.Error(1)
 	}
-	return nil, mockArgs.Error(1)
+	return mockArgs.Get(0).(*QueryResult), mockArgs.Error(1)
 }
 
 func (m *MockPostgreSQLClient) GetDB() *sql.DB {
 	args := m.Called()
-	if db, ok := args.Get(0).(*sql.DB); ok {
-		return db
+	if args.Get(0) == nil {
+		return nil
 	}
-	return nil
+	return args.Get(0).(*sql.DB)
 }
 
 func TestNew(t *testing.T) {
