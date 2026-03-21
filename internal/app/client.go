@@ -5,10 +5,63 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 
 	"github.com/lib/pq"
 )
+
+const (
+	readOnlyOption = "-c default_transaction_read_only=on"
+
+	// commentTokenLen is the length of SQL comment tokens (/* */ --).
+	commentTokenLen = 2
+)
+
+// injectReadOnlyOption appends default_transaction_read_only=on to the connection string
+// so that every connection in the pool is read-only at the PostgreSQL level.
+// Handles both URL-style (postgres://...) and keyword-value style connection strings.
+func injectReadOnlyOption(connStr string) string {
+	connStr = strings.TrimSpace(connStr)
+	if connStr == "" {
+		return connStr
+	}
+
+	// URL-style connection string
+	if strings.HasPrefix(connStr, "postgres://") || strings.HasPrefix(connStr, "postgresql://") {
+		u, err := url.Parse(connStr)
+		if err != nil {
+			return connStr
+		}
+		q := u.Query()
+		existing := q.Get("options")
+		if existing != "" {
+			q.Set("options", existing+" "+readOnlyOption)
+		} else {
+			q.Set("options", readOnlyOption)
+		}
+		u.RawQuery = q.Encode()
+		return u.String()
+	}
+
+	// Keyword-value style connection string
+	if strings.Contains(connStr, "options=") {
+		// Append to existing options value
+		// Handle both options='...' and options=...
+		optionsPrefix := "options='"
+		if idx := strings.Index(connStr, optionsPrefix); idx != -1 {
+			// Find closing quote
+			afterPrefix := idx + len(optionsPrefix)
+			closeIdx := strings.Index(connStr[afterPrefix:], "'")
+			if closeIdx != -1 {
+				insertPos := afterPrefix + closeIdx
+				return connStr[:insertPos] + " " + readOnlyOption + connStr[insertPos:]
+			}
+		}
+		return connStr
+	}
+	return connStr + " options='" + readOnlyOption + "'"
+}
 
 // PostgreSQLClientImpl implements the PostgreSQLClient interface.
 type PostgreSQLClientImpl struct {
@@ -22,8 +75,11 @@ func NewPostgreSQLClient() *PostgreSQLClientImpl {
 }
 
 // Connect establishes a connection to the PostgreSQL database.
+// The connection is configured as read-only at the PostgreSQL session level
+// to provide defense-in-depth against SQL injection attacks.
 func (c *PostgreSQLClientImpl) Connect(ctx context.Context, connectionString string) error {
-	db, err := sql.Open("postgres", connectionString)
+	readOnlyConnStr := injectReadOnlyOption(connectionString)
+	db, err := sql.Open("postgres", readOnlyConnStr)
 	if err != nil {
 		return fmt.Errorf("failed to open database connection: %w", err)
 	}
@@ -432,11 +488,157 @@ func (c *PostgreSQLClientImpl) ListIndexes(ctx context.Context, schema, table st
 	return indexes, nil
 }
 
-// validateQuery checks if the query is allowed (SELECT or WITH only).
+// copySingleQuotedLiteral copies a single-quoted string literal from runes[start]
+// (which must be a single quote) into result, returning the new index after the closing quote.
+// Handles escaped quotes ('').
+func copySingleQuotedLiteral(runes []rune, start int, result *strings.Builder) int {
+	result.WriteRune(runes[start])
+	i := start + 1
+	for i < len(runes) {
+		result.WriteRune(runes[i])
+		if runes[i] == '\'' {
+			if i+1 < len(runes) && runes[i+1] == '\'' {
+				result.WriteRune(runes[i+1])
+				i += 2
+				continue
+			}
+			return i + 1
+		}
+		i++
+	}
+	return i
+}
+
+// copyDoubleQuotedIdentifier copies a double-quoted identifier from runes[start]
+// (which must be a double quote) into result, returning the new index after the closing quote.
+func copyDoubleQuotedIdentifier(runes []rune, start int, result *strings.Builder) int {
+	result.WriteRune(runes[start])
+	i := start + 1
+	for i < len(runes) {
+		result.WriteRune(runes[i])
+		if runes[i] == '"' {
+			return i + 1
+		}
+		i++
+	}
+	return i
+}
+
+// skipBlockComment skips a block comment starting at runes[start] (which must be '/')
+// with nesting support. Returns the new index after the closing */.
+func skipBlockComment(runes []rune, start int) int {
+	depth := 1
+	i := start + commentTokenLen
+	for i < len(runes) && depth > 0 {
+		switch {
+		case i+1 < len(runes) && runes[i] == '/' && runes[i+1] == '*':
+			depth++
+			i += commentTokenLen
+		case i+1 < len(runes) && runes[i] == '*' && runes[i+1] == '/':
+			depth--
+			i += commentTokenLen
+		default:
+			i++
+		}
+	}
+	return i
+}
+
+// skipLineComment skips a line comment starting at runes[start] (which must be '-').
+// Returns the new index at the newline character (or end of runes).
+func skipLineComment(runes []rune, start int) int {
+	i := start + commentTokenLen
+	for i < len(runes) && runes[i] != '\n' {
+		i++
+	}
+	return i
+}
+
+// stripComments removes SQL comments from a query while preserving
+// content inside single-quoted string literals and double-quoted identifiers.
+// Block comments (/* */, including nested) and line comments (--) are replaced with spaces.
+func stripComments(query string) string {
+	var result strings.Builder
+	result.Grow(len(query))
+	runes := []rune(query)
+	i := 0
+
+	for i < len(runes) {
+		switch {
+		case runes[i] == '\'':
+			i = copySingleQuotedLiteral(runes, i, &result)
+		case runes[i] == '"':
+			i = copyDoubleQuotedIdentifier(runes, i, &result)
+		case i+1 < len(runes) && runes[i] == '/' && runes[i+1] == '*':
+			i = skipBlockComment(runes, i)
+			result.WriteRune(' ')
+		case i+1 < len(runes) && runes[i] == '-' && runes[i+1] == '-':
+			i = skipLineComment(runes, i)
+			result.WriteRune(' ')
+		default:
+			result.WriteRune(runes[i])
+			i++
+		}
+	}
+	return result.String()
+}
+
+// containsSemicolonOutsideLiterals checks if the query contains a semicolon
+// that is not inside a single-quoted string literal or double-quoted identifier.
+func containsSemicolonOutsideLiterals(query string) bool {
+	runes := []rune(query)
+	i := 0
+
+	for i < len(runes) {
+		// Skip single-quoted string literals
+		if runes[i] == '\'' {
+			i++
+			for i < len(runes) {
+				if runes[i] == '\'' {
+					if i+1 < len(runes) && runes[i+1] == '\'' {
+						i += 2
+						continue
+					}
+					i++
+					break
+				}
+				i++
+			}
+			continue
+		}
+
+		// Skip double-quoted identifiers
+		if runes[i] == '"' {
+			i++
+			for i < len(runes) {
+				if runes[i] == '"' {
+					i++
+					break
+				}
+				i++
+			}
+			continue
+		}
+
+		if runes[i] == ';' {
+			return true
+		}
+		i++
+	}
+	return false
+}
+
+// validateQuery checks if the query is allowed (SELECT or WITH only)
+// and rejects multi-statement queries.
+// Comments are stripped before validation to prevent comment-based injection.
 func validateQuery(query string) error {
-	trimmedQuery := strings.TrimSpace(strings.ToUpper(query))
-	if !strings.HasPrefix(trimmedQuery, "SELECT") && !strings.HasPrefix(trimmedQuery, "WITH") {
+	stripped := stripComments(query)
+	trimmed := strings.TrimSpace(strings.ToUpper(stripped))
+	if !strings.HasPrefix(trimmed, "SELECT") && !strings.HasPrefix(trimmed, "WITH") {
 		return ErrInvalidQuery
+	}
+	if containsSemicolonOutsideLiterals(stripped) {
+		return ErrMultiStatementQuery
 	}
 	return nil
 }

@@ -14,7 +14,8 @@ var (
 	ErrSchemaRequired     = errors.New("schema name is required")
 	ErrTableRequired      = errors.New("table name is required")
 	ErrQueryRequired      = errors.New("query is required")
-	ErrInvalidQuery       = errors.New("only SELECT and WITH queries are allowed")
+	ErrInvalidQuery        = errors.New("only SELECT and WITH queries are allowed")
+	ErrMultiStatementQuery = errors.New("multi-statement queries are not allowed")
 	ErrNoConnectionString = errors.New(
 		"no database connection string provided. " +
 			"Either call connect_database tool or set POSTGRES_URL/DATABASE_URL environment variable",

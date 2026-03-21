@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -466,4 +467,195 @@ func TestExecuteQueryEmptyResult(t *testing.T) {
 	assert.Equal(t, 0, result.RowCount)
 	assert.Len(t, result.Rows, 0)
 	assert.Len(t, result.Columns, 0)
+}
+
+func TestValidateQuery(t *testing.T) {
+	tests := []struct {
+		name      string
+		query     string
+		wantErr   error
+		wantNoErr bool
+	}{
+		// Valid queries
+		{name: "simple SELECT", query: "SELECT * FROM users", wantNoErr: true},
+		{name: "lowercase select", query: "select * from users", wantNoErr: true},
+		{name: "mixed case SELECT", query: "SeLeCt * FROM users", wantNoErr: true},
+		{name: "WITH CTE", query: "WITH cte AS (SELECT 1) SELECT * FROM cte", wantNoErr: true},
+		{name: "leading whitespace", query: "   SELECT * FROM users", wantNoErr: true},
+		{name: "semicolon inside string literal", query: "SELECT * FROM users WHERE name = 'a;b'", wantNoErr: true},
+		{name: "block comment inside string literal", query: "SELECT '/* not a comment */' FROM users", wantNoErr: true},
+		{name: "semicolon in double-quoted identifier", query: `SELECT "col;name" FROM users`, wantNoErr: true},
+
+		// Invalid queries (wrong statement type)
+		{name: "INSERT", query: "INSERT INTO users (name) VALUES ('test')", wantErr: ErrInvalidQuery},
+		{name: "UPDATE", query: "UPDATE users SET name = 'test'", wantErr: ErrInvalidQuery},
+		{name: "DELETE", query: "DELETE FROM users", wantErr: ErrInvalidQuery},
+		{name: "DROP TABLE", query: "DROP TABLE users", wantErr: ErrInvalidQuery},
+		{name: "CREATE TABLE", query: "CREATE TABLE test (id INT)", wantErr: ErrInvalidQuery},
+		{name: "ALTER TABLE", query: "ALTER TABLE users ADD COLUMN test INT", wantErr: ErrInvalidQuery},
+		{name: "TRUNCATE", query: "TRUNCATE users", wantErr: ErrInvalidQuery},
+
+		// Comment-based injection (should be caught after stripping comments)
+		{name: "block comment hiding INSERT", query: "/* hidden */ INSERT INTO users VALUES (1)", wantErr: ErrInvalidQuery},
+		{name: "line comment hiding INSERT", query: "-- comment\nINSERT INTO users VALUES (1)", wantErr: ErrInvalidQuery},
+		{name: "nested block comment hiding DROP", query: "/* outer /* inner */ still comment */ DROP TABLE users", wantErr: ErrInvalidQuery},
+
+		// Multi-statement injection (should be caught by semicolon detection)
+		{name: "SELECT then DROP", query: "SELECT 1; DROP TABLE users", wantErr: ErrMultiStatementQuery},
+		{name: "two SELECTs", query: "SELECT 1; SELECT 2", wantErr: ErrMultiStatementQuery},
+		{name: "trailing semicolon", query: "SELECT 1;", wantErr: ErrMultiStatementQuery},
+		{name: "semicolon with spaces", query: "SELECT 1 ; DROP TABLE users", wantErr: ErrMultiStatementQuery},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateQuery(tt.query)
+			if tt.wantNoErr {
+				assert.NoError(t, err)
+			} else {
+				assert.Error(t, err)
+				assert.True(t, errors.Is(err, tt.wantErr), "expected %v, got %v", tt.wantErr, err)
+			}
+		})
+	}
+}
+
+func TestStripComments(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "no comments",
+			input:    "SELECT * FROM users",
+			expected: "SELECT * FROM users",
+		},
+		{
+			name:     "block comment",
+			input:    "SELECT /* comment */ * FROM users",
+			expected: "SELECT   * FROM users",
+		},
+		{
+			name:     "line comment",
+			input:    "SELECT * FROM users -- trailing comment",
+			expected: "SELECT * FROM users  ",
+		},
+		{
+			name:     "line comment with newline",
+			input:    "SELECT * FROM users -- comment\nWHERE id = 1",
+			expected: "SELECT * FROM users  \nWHERE id = 1",
+		},
+		{
+			name:     "comment inside single-quoted string preserved",
+			input:    "SELECT '/* not a comment */' FROM users",
+			expected: "SELECT '/* not a comment */' FROM users",
+		},
+		{
+			name:     "comment inside double-quoted identifier preserved",
+			input:    `SELECT "col--name" FROM users`,
+			expected: `SELECT "col--name" FROM users`,
+		},
+		{
+			name:     "nested block comments",
+			input:    "SELECT /* outer /* inner */ still comment */ * FROM users",
+			expected: "SELECT   * FROM users",
+		},
+		{
+			name:     "empty string",
+			input:    "",
+			expected: "",
+		},
+		{
+			name:     "only a comment",
+			input:    "/* just a comment */",
+			expected: " ",
+		},
+		{
+			name:     "escaped single quote in string",
+			input:    "SELECT * FROM users WHERE name = 'O''Brien'",
+			expected: "SELECT * FROM users WHERE name = 'O''Brien'",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := stripComments(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestContainsSemicolonOutsideLiterals(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected bool
+	}{
+		{name: "no semicolon", input: "SELECT * FROM users", expected: false},
+		{name: "semicolon outside", input: "SELECT 1; DROP TABLE users", expected: true},
+		{name: "trailing semicolon", input: "SELECT 1;", expected: true},
+		{name: "semicolon in single-quoted string", input: "SELECT * FROM users WHERE name = 'a;b'", expected: false},
+		{name: "semicolon in double-quoted identifier", input: `SELECT "col;name" FROM users`, expected: false},
+		{name: "semicolon both inside and outside", input: "SELECT 'a;b'; DROP TABLE users", expected: true},
+		{name: "empty string", input: "", expected: false},
+		{name: "escaped quote then semicolon", input: "SELECT * FROM users WHERE name = 'O''Brien';", expected: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := containsSemicolonOutsideLiterals(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestInjectReadOnlyOption(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		contains string
+	}{
+		{
+			name:     "URL-style with existing params",
+			input:    "postgres://user:pass@localhost:5432/db?sslmode=prefer",
+			contains: "default_transaction_read_only",
+		},
+		{
+			name:     "URL-style without params",
+			input:    "postgres://user:pass@localhost:5432/db",
+			contains: "default_transaction_read_only",
+		},
+		{
+			name:     "postgresql:// scheme",
+			input:    "postgresql://user:pass@localhost/db",
+			contains: "default_transaction_read_only",
+		},
+		{
+			name:     "keyword-value style",
+			input:    "host=localhost port=5432 dbname=mydb user=myuser",
+			contains: "default_transaction_read_only",
+		},
+		{
+			name:     "empty string",
+			input:    "",
+			contains: "",
+		},
+		{
+			name:     "keyword-value with existing options",
+			input:    "host=localhost options='-c search_path=public'",
+			contains: "default_transaction_read_only",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := injectReadOnlyOption(tt.input)
+			if tt.contains != "" {
+				assert.Contains(t, result, tt.contains)
+			} else {
+				assert.Equal(t, tt.input, result)
+			}
+		})
+	}
 }
