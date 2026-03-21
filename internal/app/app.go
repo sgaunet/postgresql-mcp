@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -11,8 +12,18 @@ import (
 
 // Constants for default values.
 const (
-	DefaultSchema = "public"
+	DefaultSchema  = "public"
+	maxQueryLogLen = 100
 )
+
+// truncateQuery safely truncates a query string for logging purposes,
+// avoiding logging of potentially sensitive full query text.
+func truncateQuery(query string, maxLen int) string {
+	if len(query) <= maxLen {
+		return query
+	}
+	return query[:maxLen] + "..."
+}
 
 // ListTablesOptions represents options for listing tables.
 type ListTablesOptions struct {
@@ -265,6 +276,14 @@ func (a *App) ExecuteQuery(ctx context.Context, opts *ExecuteQueryOptions) (*Que
 
 	result, err := a.client.ExecuteQuery(ctx, opts.Query, opts.Args...)
 	if err != nil {
+		if errors.Is(err, ErrInvalidQuery) {
+			a.logSecurityEvent("invalid_query", opts.Query, err)
+			return nil, fmt.Errorf("query rejected: %w", err)
+		}
+		if errors.Is(err, ErrMultiStatementQuery) {
+			a.logSecurityEvent("multi_statement_query", opts.Query, err)
+			return nil, fmt.Errorf("query rejected: %w", err)
+		}
 		a.logger.Error("Failed to execute query", "error", err, "query", opts.Query)
 		return nil, fmt.Errorf("failed to execute query: %w", err)
 	}
@@ -306,6 +325,14 @@ func (a *App) ExplainQuery(ctx context.Context, query string, args ...any) (*Que
 
 	result, err := a.client.ExplainQuery(ctx, query, args...)
 	if err != nil {
+		if errors.Is(err, ErrInvalidQuery) {
+			a.logSecurityEvent("invalid_query", query, err)
+			return nil, fmt.Errorf("query rejected: %w", err)
+		}
+		if errors.Is(err, ErrMultiStatementQuery) {
+			a.logSecurityEvent("multi_statement_query", query, err)
+			return nil, fmt.Errorf("query rejected: %w", err)
+		}
 		a.logger.Error("Failed to explain query", "error", err, "query", query)
 		return nil, fmt.Errorf("failed to explain query: %w", err)
 	}
@@ -357,4 +384,15 @@ func (a *App) ensureConnection(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// logSecurityEvent logs a security-relevant event (e.g., rejected query)
+// with structured fields for monitoring and incident response.
+func (a *App) logSecurityEvent(event string, query string, reason error) {
+	a.logger.Warn("Security: query rejected",
+		"event", event,
+		"reason", reason.Error(),
+		"query_preview", truncateQuery(query, maxQueryLogLen),
+		"query_length", len(query),
+	)
 }

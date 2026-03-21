@@ -585,3 +585,69 @@ func TestApp_Connect_ConnectError(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to connect")
 	mockClient.AssertExpectations(t)
 }
+
+func TestApp_ExecuteQuery_SecurityAudit_InvalidQuery(t *testing.T) {
+	mockClient := &MockPostgreSQLClient{}
+	app := New(mockClient)
+
+	opts := &ExecuteQueryOptions{Query: "INSERT INTO users VALUES (1)"}
+
+	mockClient.On("Ping", mock.Anything).Return(nil)
+	mockClient.On("ExecuteQuery", mock.Anything, opts.Query, []interface{}(nil)).Return((*QueryResult)(nil), ErrInvalidQuery)
+
+	result, err := app.ExecuteQuery(context.Background(), opts)
+	assert.Nil(t, result)
+	assert.ErrorIs(t, err, ErrInvalidQuery)
+	mockClient.AssertExpectations(t)
+}
+
+func TestApp_ExecuteQuery_SecurityAudit_MultiStatement(t *testing.T) {
+	mockClient := &MockPostgreSQLClient{}
+	app := New(mockClient)
+
+	opts := &ExecuteQueryOptions{Query: "SELECT 1; DROP TABLE users"}
+
+	mockClient.On("Ping", mock.Anything).Return(nil)
+	mockClient.On("ExecuteQuery", mock.Anything, opts.Query, []interface{}(nil)).Return((*QueryResult)(nil), ErrMultiStatementQuery)
+
+	result, err := app.ExecuteQuery(context.Background(), opts)
+	assert.Nil(t, result)
+	assert.ErrorIs(t, err, ErrMultiStatementQuery)
+	mockClient.AssertExpectations(t)
+}
+
+func TestApp_ExplainQuery_SecurityAudit_InvalidQuery(t *testing.T) {
+	mockClient := &MockPostgreSQLClient{}
+	app := New(mockClient)
+
+	query := "DELETE FROM users"
+
+	mockClient.On("Ping", mock.Anything).Return(nil)
+	mockClient.On("ExplainQuery", mock.Anything, query, []interface{}(nil)).Return((*QueryResult)(nil), ErrInvalidQuery)
+
+	result, err := app.ExplainQuery(context.Background(), query)
+	assert.Nil(t, result)
+	assert.ErrorIs(t, err, ErrInvalidQuery)
+	mockClient.AssertExpectations(t)
+}
+
+func TestTruncateQuery(t *testing.T) {
+	tests := []struct {
+		name     string
+		query    string
+		maxLen   int
+		expected string
+	}{
+		{name: "short query unchanged", query: "SELECT 1", maxLen: 100, expected: "SELECT 1"},
+		{name: "exact length unchanged", query: "SELECT 1", maxLen: 8, expected: "SELECT 1"},
+		{name: "long query truncated", query: "SELECT * FROM very_long_table_name WHERE id = 1", maxLen: 20, expected: "SELECT * FROM very_l..."},
+		{name: "empty query", query: "", maxLen: 100, expected: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := truncateQuery(tt.query, tt.maxLen)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
