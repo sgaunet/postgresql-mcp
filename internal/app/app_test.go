@@ -615,6 +615,21 @@ func TestApp_ExecuteQuery_SecurityAudit_MultiStatement(t *testing.T) {
 	mockClient.AssertExpectations(t)
 }
 
+func TestApp_ExecuteQuery_SecurityAudit_ResultTooLarge(t *testing.T) {
+	mockClient := &MockPostgreSQLClient{}
+	app := New(mockClient)
+
+	opts := &ExecuteQueryOptions{Query: "SELECT * FROM huge_table"}
+
+	mockClient.On("Ping", mock.Anything).Return(nil)
+	mockClient.On("ExecuteQuery", mock.Anything, opts.Query, []any(nil)).Return((*QueryResult)(nil), ErrResultTooLarge)
+
+	result, err := app.ExecuteQuery(context.Background(), opts)
+	assert.Nil(t, result)
+	assert.ErrorIs(t, err, ErrResultTooLarge)
+	mockClient.AssertExpectations(t)
+}
+
 func TestApp_ExecuteQuery_SecurityAudit_QueryTooLong(t *testing.T) {
 	mockClient := &MockPostgreSQLClient{}
 	app := New(mockClient)

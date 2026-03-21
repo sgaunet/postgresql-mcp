@@ -30,6 +30,10 @@ const (
 	defaultMaxIdleConns    = 5
 	defaultConnMaxLifetime = time.Hour
 	defaultConnMaxIdleTime = 10 * time.Minute
+
+	// defaultMaxResultRows is the maximum number of rows returned by a query.
+	// Configurable via POSTGRES_MCP_MAX_RESULT_ROWS environment variable.
+	defaultMaxResultRows = 10000
 )
 
 // injectReadOnlyOption appends default_transaction_read_only=on to the connection string
@@ -107,6 +111,12 @@ func poolConfig() (int, int, time.Duration, time.Duration) {
 	lifetimeSec := envIntOrDefault("POSTGRES_MCP_CONN_MAX_LIFETIME", int(defaultConnMaxLifetime.Seconds()))
 	idleTimeSec := envIntOrDefault("POSTGRES_MCP_CONN_MAX_IDLE_TIME", int(defaultConnMaxIdleTime.Seconds()))
 	return maxOpen, maxIdle, time.Duration(lifetimeSec) * time.Second, time.Duration(idleTimeSec) * time.Second
+}
+
+// maxResultRows returns the maximum number of rows allowed in a query result,
+// configurable via POSTGRES_MCP_MAX_RESULT_ROWS environment variable.
+func maxResultRows() int {
+	return envIntOrDefault("POSTGRES_MCP_MAX_RESULT_ROWS", defaultMaxResultRows)
 }
 
 // Connect establishes a connection to the PostgreSQL database.
@@ -693,7 +703,8 @@ func validateQuery(query string) error {
 }
 
 // processRows processes query result rows and handles type conversion.
-func processRows(rows *sql.Rows) ([][]any, error) {
+// maxRows limits the number of rows returned to prevent memory exhaustion.
+func processRows(rows *sql.Rows, maxRows int) ([][]any, error) {
 	columns, err := rows.Columns()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get columns: %w", err)
@@ -701,6 +712,10 @@ func processRows(rows *sql.Rows) ([][]any, error) {
 
 	var result [][]any
 	for rows.Next() {
+		if len(result) >= maxRows {
+			return nil, fmt.Errorf("result set exceeded %d rows: %w", maxRows, ErrResultTooLarge)
+		}
+
 		values := make([]any, len(columns))
 		valuePtrs := make([]any, len(columns))
 		for i := range values {
@@ -744,7 +759,7 @@ func (c *PostgreSQLClientImpl) ExecuteQuery(ctx context.Context, query string, a
 		return nil, fmt.Errorf("failed to get columns: %w", err)
 	}
 
-	result, err := processRows(rows)
+	result, err := processRows(rows, maxResultRows())
 	if err != nil {
 		return nil, err
 	}
@@ -783,7 +798,7 @@ func (c *PostgreSQLClientImpl) ExplainQuery(ctx context.Context, query string, a
 		return nil, fmt.Errorf("failed to get columns: %w", err)
 	}
 
-	result, err := processRows(rows)
+	result, err := processRows(rows, maxResultRows())
 	if err != nil {
 		return nil, err
 	}
