@@ -224,9 +224,8 @@ func TestApp_ListDatabasesConnectionError(t *testing.T) {
 	databases, err := app.ListDatabases(context.Background())
 	assert.Error(t, err)
 	assert.Nil(t, databases)
-	// After our refactoring, ping failure leads to reconnection attempt, which fails due to no env vars,
-	// so we get ErrConnectionRequired instead of the original ping error
-	assert.Equal(t, ErrConnectionRequired, err)
+	// ensureConnection returns ErrConnectionRequired, now wrapped with operation context
+	assert.ErrorIs(t, err, ErrConnectionRequired)
 	mockClient.AssertExpectations(t)
 }
 
