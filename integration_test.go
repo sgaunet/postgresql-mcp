@@ -757,3 +757,22 @@ func TestIntegration_ReadOnlyEnforcement(t *testing.T) {
 	_, err = client.ExplainQuery(ctx, "SELECT 1")
 	assert.NoError(t, err)
 }
+
+func TestIntegration_PoolConfiguration(t *testing.T) {
+	_, connectionString, cleanup := setupTestContainer(t)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
+	defer cancel()
+
+	client := app.NewPostgreSQLClient()
+	err := client.Connect(ctx, connectionString)
+	require.NoError(t, err)
+	defer client.Close()
+
+	db := client.GetDB()
+	require.NotNil(t, db)
+
+	stats := db.Stats()
+	assert.Equal(t, 10, stats.MaxOpenConnections, "MaxOpenConns should be 10")
+}

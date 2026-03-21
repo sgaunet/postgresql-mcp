@@ -5,8 +5,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -663,4 +665,65 @@ func TestInjectReadOnlyOption(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestEnvIntOrDefault(t *testing.T) {
+	tests := []struct {
+		name     string
+		envVal   string
+		defVal   int
+		expected int
+	}{
+		{name: "env not set uses default", envVal: "", defVal: 10, expected: 10},
+		{name: "valid env value", envVal: "20", defVal: 10, expected: 20},
+		{name: "invalid env value uses default", envVal: "abc", defVal: 10, expected: 10},
+		{name: "zero env value uses default", envVal: "0", defVal: 10, expected: 10},
+		{name: "negative env value uses default", envVal: "-5", defVal: 10, expected: 10},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			key := "TEST_ENV_INT_OR_DEFAULT"
+			if tt.envVal != "" {
+				os.Setenv(key, tt.envVal)
+				defer os.Unsetenv(key)
+			} else {
+				os.Unsetenv(key)
+			}
+			result := envIntOrDefault(key, tt.defVal)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestPoolConfig(t *testing.T) {
+	// Test defaults (no env vars set)
+	os.Unsetenv("POSTGRES_MCP_MAX_OPEN_CONNS")
+	os.Unsetenv("POSTGRES_MCP_MAX_IDLE_CONNS")
+	os.Unsetenv("POSTGRES_MCP_CONN_MAX_LIFETIME")
+	os.Unsetenv("POSTGRES_MCP_CONN_MAX_IDLE_TIME")
+
+	maxOpen, maxIdle, maxLifetime, maxIdleTime := poolConfig()
+	assert.Equal(t, 10, maxOpen)
+	assert.Equal(t, 5, maxIdle)
+	assert.Equal(t, time.Hour, maxLifetime)
+	assert.Equal(t, 10*time.Minute, maxIdleTime)
+
+	// Test with custom env vars
+	os.Setenv("POSTGRES_MCP_MAX_OPEN_CONNS", "20")
+	os.Setenv("POSTGRES_MCP_MAX_IDLE_CONNS", "8")
+	os.Setenv("POSTGRES_MCP_CONN_MAX_LIFETIME", "1800")
+	os.Setenv("POSTGRES_MCP_CONN_MAX_IDLE_TIME", "300")
+	defer func() {
+		os.Unsetenv("POSTGRES_MCP_MAX_OPEN_CONNS")
+		os.Unsetenv("POSTGRES_MCP_MAX_IDLE_CONNS")
+		os.Unsetenv("POSTGRES_MCP_CONN_MAX_LIFETIME")
+		os.Unsetenv("POSTGRES_MCP_CONN_MAX_IDLE_TIME")
+	}()
+
+	maxOpen, maxIdle, maxLifetime, maxIdleTime = poolConfig()
+	assert.Equal(t, 20, maxOpen)
+	assert.Equal(t, 8, maxIdle)
+	assert.Equal(t, 30*time.Minute, maxLifetime)
+	assert.Equal(t, 5*time.Minute, maxIdleTime)
 }
