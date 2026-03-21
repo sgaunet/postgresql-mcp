@@ -727,3 +727,14 @@ func TestPoolConfig(t *testing.T) {
 	assert.Equal(t, 30*time.Minute, maxLifetime)
 	assert.Equal(t, 5*time.Minute, maxIdleTime)
 }
+
+func TestMaxResultRows(t *testing.T) {
+	// Default value
+	os.Unsetenv("POSTGRES_MCP_MAX_RESULT_ROWS")
+	assert.Equal(t, 10000, maxResultRows())
+
+	// Custom value via env var
+	os.Setenv("POSTGRES_MCP_MAX_RESULT_ROWS", "500")
+	defer os.Unsetenv("POSTGRES_MCP_MAX_RESULT_ROWS")
+	assert.Equal(t, 500, maxResultRows())
+}

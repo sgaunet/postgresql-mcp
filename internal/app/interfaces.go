@@ -17,6 +17,7 @@ var (
 	ErrInvalidQuery        = errors.New("only SELECT and WITH queries are allowed")
 	ErrMultiStatementQuery = errors.New("multi-statement queries are not allowed")
 	ErrQueryTooLong        = errors.New("query exceeds maximum allowed length")
+	ErrResultTooLarge      = errors.New("result set exceeds maximum allowed rows")
 	ErrNoConnectionString = errors.New(
 		"no database connection string provided. " +
 			"Either call connect_database tool or set POSTGRES_URL/DATABASE_URL environment variable",
