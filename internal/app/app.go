@@ -378,7 +378,23 @@ func (a *App) tryConnect(ctx context.Context) error {
 	return a.Connect(ctx, connectionString)
 }
 
-// ensureConnection checks if the database connection is valid and attempts to reconnect if needed.
+// ensureConnection checks if the database connection is alive and attempts
+// automatic reconnection if the connection has been lost.
+//
+// This method is called before every database operation to provide transparent
+// connection recovery. If the connection ping fails, it attempts to reconnect
+// once using the original connection parameters from POSTGRES_URL or DATABASE_URL
+// environment variables.
+//
+// Reconnection behavior:
+//   - Single reconnection attempt per operation (no retries or backoff)
+//   - Uses a background context so reconnection is not cancelled by request timeout
+//   - Logs reconnection attempts at Debug level and results at Info/Error level
+//   - Returns ErrConnectionRequired if the client is nil or reconnection fails
+//
+// Operations may experience a slight delay during reconnection. For environments
+// where connection stability is critical, configure shorter pool lifetimes via
+// POSTGRES_MCP_CONN_MAX_LIFETIME and POSTGRES_MCP_CONN_MAX_IDLE_TIME.
 func (a *App) ensureConnection(ctx context.Context) error {
 	if a.client == nil {
 		return ErrConnectionRequired
