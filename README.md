@@ -107,12 +107,12 @@ Don't forget to add the .mcp.json file in your .gitignore file if you don't want
 
 ## Configuration
 
-The PostgreSQL MCP server requires database connection information to be provided via environment variables.
+The PostgreSQL MCP server can be configured via environment variables.
 
-### Environment Variables
+### Connection
 
-- `POSTGRES_URL` (required): PostgreSQL connection URL (format: `postgres://user:password@host:port/dbname?sslmode=prefer`)
-- `DATABASE_URL` (alternative): Alternative to `POSTGRES_URL` if `POSTGRES_URL` is not set
+- `POSTGRES_URL`: PostgreSQL connection URL (format: `postgres://user:password@host:port/dbname?sslmode=prefer`)
+- `DATABASE_URL`: Alternative to `POSTGRES_URL` if `POSTGRES_URL` is not set
 
 **Example:**
 ```bash
@@ -121,7 +121,17 @@ export POSTGRES_URL="postgres://user:password@localhost:5432/mydb?sslmode=prefer
 export DATABASE_URL="postgres://user:password@localhost:5432/mydb?sslmode=prefer"
 ```
 
-**Note:** The server will attempt to connect to the database on startup. If the connection fails, it will log a warning and retry when the first tool is requested.
+**Note:** Connection environment variables are optional. Use the `connect_database` tool for explicit connection management. The server will attempt to reconnect automatically when a tool is requested.
+
+### Tuning
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `POSTGRES_MCP_MAX_OPEN_CONNS` | Maximum open database connections | `10` |
+| `POSTGRES_MCP_MAX_IDLE_CONNS` | Maximum idle database connections | `5` |
+| `POSTGRES_MCP_CONN_MAX_LIFETIME` | Connection max lifetime in seconds | `3600` |
+| `POSTGRES_MCP_CONN_MAX_IDLE_TIME` | Connection max idle time in seconds | `600` |
+| `POSTGRES_MCP_MAX_RESULT_ROWS` | Maximum rows returned per query | `10000` |
 
 ## Available Tools
 

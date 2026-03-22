@@ -562,11 +562,19 @@ OPTIONS:
     -v, --version  Show version information
 
 ENVIRONMENT VARIABLES (OPTIONAL):
-    POSTGRES_URL   PostgreSQL connection URL (fallback if connect_database tool not used)
-    DATABASE_URL   Alternative to POSTGRES_URL (fallback)
+  Connection:
+    POSTGRES_URL                    PostgreSQL connection URL (fallback if connect_database tool not used)
+    DATABASE_URL                    Alternative to POSTGRES_URL (fallback)
 
-    Note: Environment variables are now optional. Use the connect_database tool
-    for explicit connection management.
+    Note: Connection environment variables are optional. Use the connect_database
+    tool for explicit connection management.
+
+  Configuration:
+    POSTGRES_MCP_MAX_OPEN_CONNS     Maximum open database connections (default: 10)
+    POSTGRES_MCP_MAX_IDLE_CONNS     Maximum idle database connections (default: 5)
+    POSTGRES_MCP_CONN_MAX_LIFETIME  Connection max lifetime in seconds (default: 3600)
+    POSTGRES_MCP_CONN_MAX_IDLE_TIME Connection max idle time in seconds (default: 600)
+    POSTGRES_MCP_MAX_RESULT_ROWS    Maximum rows returned per query (default: 10000)
 
 DESCRIPTION:
     This MCP server provides the following tools for PostgreSQL integration:
