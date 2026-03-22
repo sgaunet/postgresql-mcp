@@ -16,6 +16,8 @@ This document describes all 9 tools available in the PostgreSQL MCP server, incl
 | [explain_query](#explain_query) | Get execution plan for a query |
 | [get_table_stats](#get_table_stats) | Get table statistics |
 
+All tools (except `connect_database`) automatically check the database connection before executing. If the connection has been lost, the server attempts one automatic reconnection. See [Connection Management](../README.md#connection-management) for details.
+
 ---
 
 ## connect_database

@@ -133,9 +133,20 @@ export DATABASE_URL="postgres://user:password@localhost:5432/mydb?sslmode=prefer
 | `POSTGRES_MCP_CONN_MAX_IDLE_TIME` | Connection max idle time in seconds | `600` |
 | `POSTGRES_MCP_MAX_RESULT_ROWS` | Maximum rows returned per query | `10000` |
 
+## Connection Management
+
+The server automatically manages database connections with health checks and transparent reconnection:
+
+1. Before every tool operation, the server pings the database to verify the connection is alive.
+2. If the ping fails (e.g., database restart, network interruption), the server logs a warning and attempts **one** automatic reconnection using the original connection parameters.
+3. If reconnection succeeds, the operation proceeds normally (with a slight delay).
+4. If reconnection fails, the operation returns an error asking the user to reconnect via `connect_database`.
+
+Only one reconnection attempt is made per operation — there is no retry loop or backoff. For environments with frequent connection drops, consider tuning `POSTGRES_MCP_CONN_MAX_LIFETIME` and `POSTGRES_MCP_CONN_MAX_IDLE_TIME` to recycle connections proactively.
+
 ## Available Tools
 
-The PostgreSQL MCP server provides 8 database tools for interacting with PostgreSQL databases. For detailed information about each tool, including parameters, return values, and examples, see the [Tools Documentation](docs/tools.md).
+The PostgreSQL MCP server provides 9 database tools for interacting with PostgreSQL databases. For detailed information about each tool, including parameters, return values, and examples, see the [Tools Documentation](docs/tools.md).
 
 ## Security
 
