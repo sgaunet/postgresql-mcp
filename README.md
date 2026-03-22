@@ -176,6 +176,7 @@ This MCP server is designed with security as a priority:
 ## Documentation
 
 - [Tools Documentation](docs/tools.md) - Detailed reference for all available tools with parameters and examples
+- [Architecture](docs/ARCHITECTURE.md) - Design patterns, layer responsibilities, and system architecture
 
 ## Development
 
