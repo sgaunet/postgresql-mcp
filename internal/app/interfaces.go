@@ -79,37 +79,56 @@ type QueryResult struct {
 	RowCount int      `json:"row_count"`
 }
 
-// ConnectionManager handles database connection operations.
+// ConnectionManager handles database connection lifecycle.
 type ConnectionManager interface {
+	// Connect establishes a connection to a PostgreSQL database.
+	// The connection is configured as read-only with pool settings from environment variables.
 	Connect(ctx context.Context, connectionString string) error
+	// Close closes the database connection and releases resources.
 	Close() error
+	// Ping verifies the database connection is alive.
 	Ping(ctx context.Context) error
+	// GetDB returns the underlying *sql.DB for advanced usage or testing.
 	GetDB() *sql.DB
 }
 
-// DatabaseExplorer handles database-level operations.
+// DatabaseExplorer handles database and schema discovery.
 type DatabaseExplorer interface {
+	// ListDatabases returns all non-template databases on the server.
 	ListDatabases(ctx context.Context) ([]*DatabaseInfo, error)
+	// GetCurrentDatabase returns the name of the currently connected database.
 	GetCurrentDatabase(ctx context.Context) (string, error)
+	// ListSchemas returns all user-created schemas (excludes system schemas).
 	ListSchemas(ctx context.Context) ([]*SchemaInfo, error)
 }
 
-// TableExplorer handles table-level operations.
+// TableExplorer handles table metadata and statistics retrieval.
 type TableExplorer interface {
+	// ListTables returns tables and views in the given schema.
 	ListTables(ctx context.Context, schema string) ([]*TableInfo, error)
+	// ListTablesWithStats returns tables with size and row count in a single optimized query.
 	ListTablesWithStats(ctx context.Context, schema string) ([]*TableInfo, error)
+	// DescribeTable returns column metadata (name, type, nullable, default) for a table.
 	DescribeTable(ctx context.Context, schema, table string) ([]*ColumnInfo, error)
+	// GetTableStats returns row count statistics for a table, using pg_stat estimates
+	// with a COUNT(*) fallback for newly created tables.
 	GetTableStats(ctx context.Context, schema, table string) (*TableInfo, error)
+	// ListIndexes returns all indexes on a table with column, uniqueness, and type info.
 	ListIndexes(ctx context.Context, schema, table string) ([]*IndexInfo, error)
 }
 
-// QueryExecutor handles query operations.
+// QueryExecutor handles read-only query execution and analysis.
 type QueryExecutor interface {
+	// ExecuteQuery runs a validated SELECT/WITH query and returns the result set.
+	// Queries are validated for safety (no mutations, no multi-statement, size limits).
 	ExecuteQuery(ctx context.Context, query string, args ...any) (*QueryResult, error)
+	// ExplainQuery returns the EXPLAIN ANALYZE execution plan for a query as JSON.
 	ExplainQuery(ctx context.Context, query string, args ...any) (*QueryResult, error)
 }
 
-// PostgreSQLClient interface combines all database operations.
+// PostgreSQLClient combines all database operations into a single read-only interface.
+// All query execution is restricted to SELECT and WITH statements.
+// Implementations must enforce read-only access at both the validation and connection level.
 type PostgreSQLClient interface {
 	ConnectionManager
 	DatabaseExplorer
