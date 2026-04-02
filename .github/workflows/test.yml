@@ -13,7 +13,7 @@ jobs:
     - name: Install Go
       uses: actions/setup-go@v6
       with:
-        go-version: '>=1.25'
+        go-version-file: 'go.mod'
 
     -
       # Add support for more platforms with QEMU (optional)
