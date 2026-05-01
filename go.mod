@@ -3,7 +3,7 @@ module github.com/sylvain/postgresql-mcp
 go 1.25.5
 
 require (
-	github.com/lib/pq v1.12.1
+	github.com/lib/pq v1.12.3
 	github.com/mark3labs/mcp-go v0.49.0
 	github.com/stretchr/testify v1.11.1
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.41.0
