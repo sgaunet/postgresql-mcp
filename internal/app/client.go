@@ -63,23 +63,34 @@ func injectReadOnlyOption(connStr string) string {
 		return u.String()
 	}
 
-	// Keyword-value style connection string
-	if strings.Contains(connStr, "options=") {
-		// Append to existing options value
-		// Handle both options='...' and options=...
-		optionsPrefix := "options='"
-		if idx := strings.Index(connStr, optionsPrefix); idx != -1 {
-			// Find closing quote
-			afterPrefix := idx + len(optionsPrefix)
-			closeIdx := strings.Index(connStr[afterPrefix:], "'")
-			if closeIdx != -1 {
-				insertPos := afterPrefix + closeIdx
-				return connStr[:insertPos] + " " + readOnlyOption + connStr[insertPos:]
-			}
-		}
-		return connStr
+	// Keyword-value style connection string.
+	optionsIdx := strings.Index(connStr, "options=")
+	if optionsIdx == -1 {
+		return connStr + " options='" + readOnlyOption + "'"
 	}
-	return connStr + " options='" + readOnlyOption + "'"
+	valStart := optionsIdx + len("options=")
+
+	// Quoted form: inject the new option before the closing quote.
+	if valStart < len(connStr) && connStr[valStart] == '\'' {
+		closeRel := strings.Index(connStr[valStart+1:], "'")
+		if closeRel == -1 {
+			// Malformed (unterminated quote): leave alone rather than corrupt the DSN.
+			return connStr
+		}
+		closeIdx := valStart + 1 + closeRel
+		return connStr[:closeIdx] + " " + readOnlyOption + connStr[closeIdx:]
+	}
+
+	// Unquoted form (issue #84): value runs to next whitespace or EOS.
+	// Rewrite as the quoted form so a multi-token options payload stays a
+	// single value; previously this branch silently returned the DSN
+	// unchanged, skipping the read-only enforcement.
+	valEnd := len(connStr)
+	if rel := strings.IndexAny(connStr[valStart:], " \t\n"); rel != -1 {
+		valEnd = valStart + rel
+	}
+	existing := connStr[valStart:valEnd]
+	return connStr[:optionsIdx] + "options='" + existing + " " + readOnlyOption + "'" + connStr[valEnd:]
 }
 
 // PostgreSQLClientImpl implements the PostgreSQLClient interface.

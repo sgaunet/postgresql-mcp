@@ -655,6 +655,23 @@ func TestInjectReadOnlyOption(t *testing.T) {
 			input:    "host=localhost options='-c search_path=public'",
 			contains: "default_transaction_read_only",
 		},
+		{
+			// Regression for issue #84: previously fell through to the bare
+			// "return connStr" path and silently skipped the read-only guard.
+			name:     "keyword-value with unquoted options (issue #84)",
+			input:    "host=localhost options=-csome_option=on",
+			contains: "default_transaction_read_only=on",
+		},
+		{
+			name:     "unquoted options at start, other keyword after",
+			input:    "options=-csome_option=on host=localhost",
+			contains: "default_transaction_read_only=on",
+		},
+		{
+			name:     "unquoted options at end of DSN",
+			input:    "host=localhost dbname=mydb options=-cfoo=bar",
+			contains: "default_transaction_read_only=on",
+		},
 	}
 
 	for _, tt := range tests {
@@ -667,6 +684,32 @@ func TestInjectReadOnlyOption(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestInjectReadOnlyOption_UnquotedOptions_ProducesValidQuotedForm asserts
+// that the unquoted-options DSN is rewritten into the quoted form, with the
+// pre-existing payload preserved alongside the injected read-only option,
+// and that no value-keyword from the remainder of the DSN was clobbered.
+// This is the structural complement to the contains-only assertion in the
+// table above and captures the regression at issue #84 in detail.
+func TestInjectReadOnlyOption_UnquotedOptions_ProducesValidQuotedForm(t *testing.T) {
+	in := "host=localhost options=-csome_option=on dbname=mydb"
+	out := injectReadOnlyOption(in)
+
+	assert.Contains(t, out, "options='-csome_option=on -c default_transaction_read_only=on'",
+		"unquoted options must be merged into a single quoted value with read-only appended")
+	assert.Contains(t, out, "host=localhost", "leading keyword must be preserved")
+	assert.Contains(t, out, "dbname=mydb", "trailing keyword must be preserved")
+}
+
+// TestInjectReadOnlyOption_UnterminatedQuotedOptions_LeftAlone covers the
+// malformed-DSN edge case: a quoted options= value with no closing quote is
+// returned unchanged rather than corrupted (the DSN was already invalid;
+// don't make it worse).
+func TestInjectReadOnlyOption_UnterminatedQuotedOptions_LeftAlone(t *testing.T) {
+	in := "host=localhost options='-c foo=bar"
+	out := injectReadOnlyOption(in)
+	assert.Equal(t, in, out)
 }
 
 func TestEnvIntOrDefault(t *testing.T) {
