@@ -111,7 +111,7 @@ type TableExplorer interface {
 	// DescribeTable returns column metadata (name, type, nullable, default) for a table.
 	DescribeTable(ctx context.Context, schema, table string) ([]*ColumnInfo, error)
 	// GetTableStats returns row count statistics for a table, using pg_stat estimates
-	// with a COUNT(*) fallback for newly created tables.
+	// and falling back to pg_class.reltuples for tables not yet covered by pg_stat.
 	GetTableStats(ctx context.Context, schema, table string) (*TableInfo, error)
 	// ListIndexes returns all indexes on a table with column, uniqueness, and type info.
 	ListIndexes(ctx context.Context, schema, table string) ([]*IndexInfo, error)
