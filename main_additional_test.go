@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"flag"
+	"net/url"
 	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // Test the command line flag handling functions directly
@@ -363,4 +365,92 @@ func TestBuildConnectionString_CustomPort(t *testing.T) {
 	connStr, err := buildConnectionString(params)
 	assert.NoError(t, err)
 	assert.Equal(t, "postgres://admin:secret@dbserver:5433/mydb?sslmode=require", connStr)
+}
+
+// TestBuildConnectionString_AcceptsAllValidSSLModes locks in the libpq
+// allowlist that buildConnectionString recognises (issue #86).
+func TestBuildConnectionString_AcceptsAllValidSSLModes(t *testing.T) {
+	for _, sm := range []string{"disable", "allow", "prefer", "require", "verify-ca", "verify-full"} {
+		t.Run(sm, func(t *testing.T) {
+			params := ConnectionParams{
+				Host:     "h",
+				User:     "u",
+				Password: "p",
+				Database: "d",
+				SSLMode:  sm,
+			}
+			connStr, err := buildConnectionString(params)
+			require.NoError(t, err)
+			assert.Contains(t, connStr, "sslmode="+sm)
+		})
+	}
+}
+
+// TestBuildConnectionString_RejectsInvalidSSLMode covers the parameter
+// injection / silent-downgrade vector from issue #86. Each input would
+// previously have been embedded verbatim into the URL.
+func TestBuildConnectionString_RejectsInvalidSSLMode(t *testing.T) {
+	cases := []string{
+		"off",                  // not a libpq sslmode
+		"true",                 // not a libpq sslmode
+		"prefer&extra=value",   // URL-parameter injection
+		"DISABLE",              // libpq is case-sensitive
+		" require",             // leading whitespace
+		"verify-full;DROP",     // would not actually inject SQL but is plainly wrong
+	}
+	for _, sm := range cases {
+		t.Run(sm, func(t *testing.T) {
+			params := ConnectionParams{
+				Host:     "h",
+				User:     "u",
+				Password: "p",
+				Database: "d",
+				SSLMode:  sm,
+			}
+			_, err := buildConnectionString(params)
+			require.Error(t, err)
+			assert.ErrorIs(t, err, ErrInvalidSSLMode)
+		})
+	}
+}
+
+// TestBuildConnectionString_EncodesSpecialCharactersInPassword covers the
+// URL-corruption vector: each of @, /, ?, # in a password would split the
+// URL authority or query under fmt.Sprintf-based construction. Assert that
+// the password round-trips correctly through net/url.Parse, which proves
+// the encoding is structurally valid (issue #86).
+func TestBuildConnectionString_EncodesSpecialCharactersInPassword(t *testing.T) {
+	dangerous := map[string]string{
+		"at-sign":    "p@ss",
+		"slash":      "p/ss",
+		"question":   "p?ss",
+		"hash":       "p#ss",
+		"mixed":      "p@/?#ss",
+		"colon":      "p:ss",
+		"percent":    "p%ss",
+		"whitespace": "p ss",
+	}
+	for name, pw := range dangerous {
+		t.Run(name, func(t *testing.T) {
+			params := ConnectionParams{
+				Host:     "host",
+				Port:     5432,
+				User:     "user",
+				Password: pw,
+				Database: "db",
+			}
+			connStr, err := buildConnectionString(params)
+			require.NoError(t, err)
+
+			// Round-trip: the produced URL must be parseable and the password
+			// must decode back to the original.
+			u, err := url.Parse(connStr)
+			require.NoError(t, err, "produced URL must be parseable")
+			gotPw, hasPw := u.User.Password()
+			require.True(t, hasPw, "password should be present in parsed URL")
+			assert.Equal(t, pw, gotPw, "round-tripped password must match original")
+			assert.Equal(t, "host:5432", u.Host, "host/port must not be split by password content")
+			assert.Equal(t, "/db", u.Path, "path must not be split by password content")
+		})
+	}
 }
