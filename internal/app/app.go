@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sync"
 
 	"github.com/sylvain/postgresql-mcp/internal/logger"
 	"golang.org/x/sync/singleflight"
@@ -44,10 +45,18 @@ type ExecuteQueryOptions struct {
 // reconnectGroup dedupes concurrent reconnect attempts so that N handler
 // goroutines observing the same connection failure trigger only one
 // underlying Connect call (issue #83).
+//
+// connStr holds the connection string from the most recent successful
+// Connect call. ensureConnection uses it for reconnects so that an
+// explicit connect_database session is not silently overridden by
+// POSTGRES_URL / DATABASE_URL on the next ping failure (issue #87).
 type App struct {
 	client         PostgreSQLClient
 	logger         *slog.Logger
 	reconnectGroup singleflight.Group
+
+	connStrMu sync.RWMutex
+	connStr   string
 }
 
 // New creates a new App instance with the provided PostgreSQLClient.
@@ -104,6 +113,12 @@ func (a *App) Connect(ctx context.Context, connectionString string) error {
 		a.logger.Error("Failed to connect to database", "error", err)
 		return fmt.Errorf("failed to connect: %w", err)
 	}
+
+	// Remember the string that established this session so that automatic
+	// reconnects target the same database (issue #87).
+	a.connStrMu.Lock()
+	a.connStr = connectionString
+	a.connStrMu.Unlock()
 
 	a.logger.Info("Successfully connected to PostgreSQL database")
 	return nil
@@ -368,19 +383,33 @@ func (a *App) ValidateConnection(ctx context.Context) error {
 	return a.ensureConnection(ctx)
 }
 
-// tryConnect attempts to connect using environment variables as a fallback mechanism.
-// Returns ErrNoConnectionString if no environment variables are set.
+// tryConnect picks the connection string for an (initial or recovery) Connect.
+//
+// Sticky-session: if a prior Connect succeeded, reuse the same connection
+// string so that auto-reconnect targets the same database the caller
+// explicitly chose via connect_database (issue #87). POSTGRES_URL /
+// DATABASE_URL are consulted only when no prior session exists, i.e. for
+// initial bootstrap.
+//
+// Returns ErrNoConnectionString if there is no stored string and no env var
+// fallback.
 func (a *App) tryConnect(ctx context.Context) error {
-	// Try environment variables as fallback
+	a.connStrMu.RLock()
+	stored := a.connStr
+	a.connStrMu.RUnlock()
+
+	if stored != "" {
+		return a.Connect(ctx, stored)
+	}
+
+	// Initial bootstrap only: env-var fallback.
 	connectionString := os.Getenv("POSTGRES_URL")
 	if connectionString == "" {
 		connectionString = os.Getenv("DATABASE_URL")
 	}
-
 	if connectionString == "" {
 		return ErrNoConnectionString
 	}
-
 	return a.Connect(ctx, connectionString)
 }
 
