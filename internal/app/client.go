@@ -35,6 +35,15 @@ const (
 	// defaultMaxResultRows is the maximum number of rows returned by a query.
 	// Configurable via POSTGRES_MCP_MAX_RESULT_ROWS environment variable.
 	defaultMaxResultRows = 10000
+
+	// maxCountFallbackTables caps the COUNT(*) fallback in ListTablesWithStats
+	// so a schema with hundreds of fresh tables cannot fan out into unbounded
+	// sequential round-trips (issue #90).
+	maxCountFallbackTables = 20
+
+	// countFallbackTimeout caps each COUNT(*) fallback call so a single billion-row
+	// table cannot tie up a pool connection for minutes (issue #90).
+	countFallbackTimeout = 5 * time.Second
 )
 
 // injectReadOnlyOption appends default_transaction_read_only=on to the connection string
@@ -334,9 +343,10 @@ func (c *PostgreSQLClientImpl) ListTables(ctx context.Context, schema string) ([
 	return tables, nil
 }
 
-// ListTablesWithStats returns a list of tables with size and row count statistics in a single optimized query.
-// This eliminates the N+1 query pattern by joining table metadata with pg_stat_user_tables.
-// For tables where statistics show 0 rows, it falls back to COUNT(*) to get actual row counts.
+// ListTablesWithStats returns a list of tables with size and row count statistics in a single query.
+// Row count prefers pg_stat_user_tables (n_tup_ins - n_tup_del); when that is 0 — e.g., fresh tables —
+// it falls back to pg_class.reltuples in the same SELECT, so the result remains O(1) round-trips
+// regardless of how many tables show empty statistics.
 func (c *PostgreSQLClientImpl) ListTablesWithStats(ctx context.Context, schema string) ([]*TableInfo, error) {
 	db := c.db.Load()
 	if db == nil {
@@ -347,8 +357,12 @@ func (c *PostgreSQLClientImpl) ListTablesWithStats(ctx context.Context, schema s
 		schema = DefaultSchema
 	}
 
-	// Single optimized query that joins tables with statistics
-	// We use n_tup_ins - n_tup_del which is more accurate than n_live_tup for recently modified tables
+	// Single optimized query that joins tables with statistics. Row count uses
+	// n_tup_ins - n_tup_del (more accurate than n_live_tup after recent writes);
+	// when that is 0 — pg_stat not yet populated for fresh tables — fall back to
+	// pg_class.reltuples in the same round-trip. Avoids per-table COUNT(*) which
+	// is O(rows) and previously fanned out as N+1 over the result set (issue #90).
+	// reltuples is -1 on PG14+ until first ANALYZE, so clamp with GREATEST.
 	query := `
 		WITH table_list AS (
 			SELECT
@@ -372,11 +386,21 @@ func (c *PostgreSQLClientImpl) ListTablesWithStats(ctx context.Context, schema s
 			t.tablename,
 			t.type,
 			t.owner,
-			COALESCE(s.n_tup_ins - s.n_tup_del, 0) as row_count,
+			CASE
+				WHEN COALESCE(s.n_tup_ins - s.n_tup_del, 0) > 0
+					THEN s.n_tup_ins - s.n_tup_del
+				WHEN t.type = 'table'
+					THEN GREATEST(COALESCE(c.reltuples, 0)::bigint, 0)
+				ELSE 0
+			END as row_count,
 			pg_size_pretty(COALESCE(pg_total_relation_size(quote_ident(t.schemaname) || '.' || quote_ident(t.tablename)), 0)) as size
 		FROM table_list t
 		LEFT JOIN pg_stat_user_tables s
 			ON t.schemaname = s.schemaname AND t.tablename = s.relname
+		LEFT JOIN pg_namespace n
+			ON n.nspname = t.schemaname
+		LEFT JOIN pg_class c
+			ON c.relname = t.tablename AND c.relnamespace = n.oid AND c.relkind IN ('r', 'p')
 		ORDER BY t.tablename`
 
 	rows, err := db.QueryContext(ctx, query, schema)
@@ -398,24 +422,7 @@ func (c *PostgreSQLClientImpl) ListTablesWithStats(ctx context.Context, schema s
 		return nil, fmt.Errorf("failed to iterate table rows with stats: %w", err)
 	}
 
-	// For tables where statistics show 0 rows, fall back to actual COUNT(*)
-	// This handles newly created tables where pg_stat hasn't been updated yet
-	for _, table := range tables {
-		if table.RowCount == 0 && table.Type == "table" {
-			// Use pq.QuoteIdentifier for SQL-safe identifier escaping to prevent
-			// SQL injection via malicious schema or table names.
-			countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s.%s",
-				pq.QuoteIdentifier(table.Schema),
-				pq.QuoteIdentifier(table.Name))
-			var actualCount int64
-			if err := db.QueryRowContext(ctx, countQuery).Scan(&actualCount); err != nil {
-				// Log warning but don't fail the entire operation
-				continue
-			}
-			table.RowCount = actualCount
-		}
-	}
-
+	c.refineZeroRowCounts(ctx, db, tables)
 	return tables, nil
 }
 
@@ -478,40 +485,53 @@ func (c *PostgreSQLClientImpl) GetTableStats(ctx context.Context, schema, table 
 		schema = DefaultSchema
 	}
 
-	// Get basic table info
 	tableInfo := &TableInfo{
 		Schema: schema,
 		Name:   table,
 	}
 
-	// Get row count (approximate for large tables, exact for small tables)
-	countQuery := `
-		SELECT COALESCE(n_tup_ins - n_tup_del, 0) as estimated_rows
-		FROM pg_stat_user_tables
-		WHERE schemaname = $1 AND relname = $2`
+	// Single round-trip: prefer n_tup_ins - n_tup_del when present, otherwise
+	// fall back to pg_class.reltuples. reltuples is -1 on PG14+ until first
+	// ANALYZE, so clamp with GREATEST.
+	estimateQuery := `
+		SELECT
+			CASE
+				WHEN COALESCE(s.n_tup_ins - s.n_tup_del, 0) > 0
+					THEN s.n_tup_ins - s.n_tup_del
+				ELSE GREATEST(COALESCE(c.reltuples, 0)::bigint, 0)
+			END as row_count
+		FROM pg_class c
+		JOIN pg_namespace n ON n.oid = c.relnamespace
+		LEFT JOIN pg_stat_user_tables s
+			ON s.schemaname = n.nspname AND s.relname = c.relname
+		WHERE n.nspname = $1 AND c.relname = $2 AND c.relkind IN ('r', 'p')`
 
 	var rowCount sql.NullInt64
-	err := db.QueryRowContext(ctx, countQuery, schema, table).Scan(&rowCount)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+	err := db.QueryRowContext(ctx, estimateQuery, schema, table).Scan(&rowCount)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("table %s.%s: %w", schema, table, ErrTableNotFound)
+		}
 		return nil, fmt.Errorf("failed to get table stats: %w", err)
 	}
+	if rowCount.Valid {
+		tableInfo.RowCount = rowCount.Int64
+	}
 
-	// If statistics are not available or show 0 rows, fall back to actual count
-	// This is useful for newly created tables where pg_stat hasn't been updated
-	if !rowCount.Valid || rowCount.Int64 == 0 {
-		// Use pq.QuoteIdentifier for SQL-safe identifier escaping to prevent
-		// SQL injection via malicious schema or table names.
-		actualCountQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s.%s",
+	// If the estimate is 0, fall back to an exact COUNT(*) for freshly written
+	// tables that pg_stat has not observed and that no ANALYZE has touched.
+	// The fallback is bounded by countFallbackTimeout so a single billion-row
+	// table cannot tie up a pool connection for minutes (issue #90).
+	if tableInfo.RowCount == 0 {
+		countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s.%s",
 			pq.QuoteIdentifier(schema),
 			pq.QuoteIdentifier(table))
+		countCtx, cancel := context.WithTimeout(ctx, countFallbackTimeout)
+		defer cancel()
 		var actualCount int64
-		err := db.QueryRowContext(ctx, actualCountQuery).Scan(&actualCount)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get actual row count: %w", err)
+		if err := db.QueryRowContext(countCtx, countQuery).Scan(&actualCount); err == nil {
+			tableInfo.RowCount = actualCount
 		}
-		tableInfo.RowCount = actualCount
-	} else {
-		tableInfo.RowCount = rowCount.Int64
 	}
 
 	return tableInfo, nil
@@ -844,4 +864,35 @@ func (c *PostgreSQLClientImpl) ExplainQuery(ctx context.Context, query string, a
 		Rows:     result,
 		RowCount: len(result),
 	}, nil
+}
+
+// refineZeroRowCounts issues a bounded number of COUNT(*) probes — each with a
+// per-call timeout — for tables that still report 0 rows after the reltuples
+// fallback. This handles freshly written tables that pg_stat has not yet
+// observed and that no ANALYZE has touched, without re-introducing the
+// unbounded N+1 / long-running COUNT(*) pattern of issue #90.
+func (c *PostgreSQLClientImpl) refineZeroRowCounts(ctx context.Context, db *sql.DB, tables []*TableInfo) {
+	probed := 0
+	for _, table := range tables {
+		if probed >= maxCountFallbackTables {
+			return
+		}
+		if table.RowCount != 0 || table.Type != "table" {
+			continue
+		}
+
+		// pq.QuoteIdentifier escapes both schema and table to defend against
+		// SQL injection via malicious identifiers.
+		countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s.%s",
+			pq.QuoteIdentifier(table.Schema),
+			pq.QuoteIdentifier(table.Name))
+
+		countCtx, cancel := context.WithTimeout(ctx, countFallbackTimeout)
+		var actualCount int64
+		if err := db.QueryRowContext(countCtx, countQuery).Scan(&actualCount); err == nil {
+			table.RowCount = actualCount
+		}
+		cancel()
+		probed++
+	}
 }
