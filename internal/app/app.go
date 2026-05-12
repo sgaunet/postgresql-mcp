@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"sync"
 
 	"github.com/sylvain/postgresql-mcp/internal/logger"
@@ -25,6 +26,22 @@ func truncateQuery(query string, maxLen int) string {
 		return query
 	}
 	return query[:maxLen] + "..."
+}
+
+// applyLimit wraps a user query in a subquery with an outer LIMIT so that
+// PostgreSQL itself caps the result set instead of streaming maxResultRows
+// to the server only to discard them in memory (issue #91).
+//
+// limit must be > 0. The inner query is trimmed of trailing whitespace and
+// any trailing semicolons that slipped past validation; validateQuery
+// already rejects multi-statement queries, so this is a defensive trim.
+func applyLimit(query string, limit int) string {
+	inner := strings.TrimRight(query, "; \t\r\n")
+	// SELECT * is required: the user query's projection is opaque here and
+	// must be preserved verbatim. limit is an int caller-supplied integer
+	// (bounded by the MCP tool schema) and cannot inject SQL.
+	//nolint:unqueryvet // wrapper preserves user-defined projection
+	return fmt.Sprintf("SELECT * FROM (%s) AS _postgres_mcp_limit_sub LIMIT %d", inner, limit)
 }
 
 // ListTablesOptions represents options for listing tables.
@@ -293,9 +310,14 @@ func (a *App) ExecuteQuery(ctx context.Context, opts *ExecuteQueryOptions) (*Que
 		return nil, ErrQueryRequired
 	}
 
-	a.logger.Debug("Executing query", "query", opts.Query)
+	a.logger.Debug("Executing query", "query", opts.Query, "limit", opts.Limit)
 
-	result, err := a.client.ExecuteQuery(ctx, opts.Query, opts.Args...)
+	query := opts.Query
+	if opts.Limit > 0 {
+		query = applyLimit(query, opts.Limit)
+	}
+
+	result, err := a.client.ExecuteQuery(ctx, query, opts.Args...)
 	if err != nil {
 		if errors.Is(err, ErrResultTooLarge) {
 			a.logSecurityEvent("result_too_large", opts.Query, err)
@@ -315,12 +337,6 @@ func (a *App) ExecuteQuery(ctx context.Context, opts *ExecuteQueryOptions) (*Que
 		}
 		a.logger.Error("Failed to execute query", "error", err, "query", opts.Query)
 		return nil, fmt.Errorf("failed to execute query: %w", err)
-	}
-
-	// Apply limit if specified
-	if opts.Limit > 0 && len(result.Rows) > opts.Limit {
-		result.Rows = result.Rows[:opts.Limit]
-		result.RowCount = len(result.Rows)
 	}
 
 	a.logger.Debug("Successfully executed query", "row_count", result.RowCount)

@@ -423,10 +423,12 @@ func TestApp_ExecuteQueryWithLimit(t *testing.T) {
 	mockClient := &MockPostgreSQLClient{}
 	app := New(mockClient)
 
-	originalResult := &QueryResult{
+	// Server returns only the limited rows (PostgreSQL applies the LIMIT,
+	// no over-fetch). Issue #91.
+	limitedResult := &QueryResult{
 		Columns:  []string{"id", "name"},
-		Rows:     [][]interface{}{{1, "John"}, {2, "Jane"}, {3, "Bob"}},
-		RowCount: 3,
+		Rows:     [][]any{{1, "John"}, {2, "Jane"}},
+		RowCount: 2,
 	}
 
 	opts := &ExecuteQueryOptions{
@@ -434,13 +436,53 @@ func TestApp_ExecuteQueryWithLimit(t *testing.T) {
 		Limit: 2,
 	}
 
+	expectedWrappedQuery := "SELECT * FROM (SELECT id, name FROM users) AS _postgres_mcp_limit_sub LIMIT 2"
+
 	mockClient.On("Ping", mock.Anything).Return(nil)
-	mockClient.On("ExecuteQuery", mock.Anything, "SELECT id, name FROM users", []interface{}(nil)).Return(originalResult, nil)
+	mockClient.On("ExecuteQuery", mock.Anything, expectedWrappedQuery, []any(nil)).Return(limitedResult, nil)
 
 	result, err := app.ExecuteQuery(context.Background(), opts)
 	assert.NoError(t, err)
 	assert.Len(t, result.Rows, 2)
 	assert.Equal(t, 2, result.RowCount)
+	mockClient.AssertExpectations(t)
+}
+
+func TestApp_ExecuteQueryLimitTrimsTrailingSemicolon(t *testing.T) {
+	mockClient := &MockPostgreSQLClient{}
+	app := New(mockClient)
+
+	opts := &ExecuteQueryOptions{
+		Query: "SELECT 1  \n",
+		Limit: 5,
+	}
+
+	expectedWrappedQuery := "SELECT * FROM (SELECT 1) AS _postgres_mcp_limit_sub LIMIT 5"
+
+	mockClient.On("Ping", mock.Anything).Return(nil)
+	mockClient.On("ExecuteQuery", mock.Anything, expectedWrappedQuery, []any(nil)).
+		Return(&QueryResult{Columns: []string{"?column?"}, Rows: [][]any{{1}}, RowCount: 1}, nil)
+
+	_, err := app.ExecuteQuery(context.Background(), opts)
+	assert.NoError(t, err)
+	mockClient.AssertExpectations(t)
+}
+
+func TestApp_ExecuteQueryWithoutLimitPassesQueryThrough(t *testing.T) {
+	mockClient := &MockPostgreSQLClient{}
+	app := New(mockClient)
+
+	opts := &ExecuteQueryOptions{
+		Query: "SELECT id, name FROM users",
+	}
+
+	mockClient.On("Ping", mock.Anything).Return(nil)
+	// No wrap: original query is forwarded verbatim when Limit is unset.
+	mockClient.On("ExecuteQuery", mock.Anything, "SELECT id, name FROM users", []any(nil)).
+		Return(&QueryResult{Columns: []string{"id", "name"}, Rows: [][]any{}, RowCount: 0}, nil)
+
+	_, err := app.ExecuteQuery(context.Background(), opts)
+	assert.NoError(t, err)
 	mockClient.AssertExpectations(t)
 }
 
