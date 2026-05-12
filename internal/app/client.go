@@ -9,6 +9,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/lib/pq"
@@ -82,8 +83,12 @@ func injectReadOnlyOption(connStr string) string {
 }
 
 // PostgreSQLClientImpl implements the PostgreSQLClient interface.
+//
+// db is held as atomic.Pointer so that concurrent handler goroutines can
+// load the current *sql.DB without locking, while Connect can atomically
+// swap in a freshly opened pool during reconnection (issue #83).
 type PostgreSQLClientImpl struct {
-	db               *sql.DB
+	db               atomic.Pointer[sql.DB]
 	connectionString string
 }
 
@@ -145,17 +150,23 @@ func (c *PostgreSQLClientImpl) Connect(ctx context.Context, connectionString str
 		return fmt.Errorf("failed to ping database: %w", err)
 	}
 
-	c.db = db
+	// Atomic swap; close any previous pool that handler goroutines may still
+	// hold a reference to. sql.DB.Close waits for in-flight queries on that
+	// handle to drain, so concurrent readers degrade gracefully.
+	if old := c.db.Swap(db); old != nil {
+		_ = old.Close()
+	}
 	c.connectionString = connectionString
 	return nil
 }
 
 // Close closes the database connection.
 func (c *PostgreSQLClientImpl) Close() error {
-	if c.db == nil {
+	db := c.db.Swap(nil)
+	if db == nil {
 		return nil
 	}
-	if err := c.db.Close(); err != nil {
+	if err := db.Close(); err != nil {
 		return fmt.Errorf("failed to close database: %w", err)
 	}
 	return nil
@@ -163,10 +174,11 @@ func (c *PostgreSQLClientImpl) Close() error {
 
 // Ping checks if the database connection is alive.
 func (c *PostgreSQLClientImpl) Ping(ctx context.Context) error {
-	if c.db == nil {
+	db := c.db.Load()
+	if db == nil {
 		return ErrNoDatabaseConnection
 	}
-	if err := c.db.PingContext(ctx); err != nil {
+	if err := db.PingContext(ctx); err != nil {
 		return fmt.Errorf("failed to ping database: %w", err)
 	}
 	return nil
@@ -174,12 +186,13 @@ func (c *PostgreSQLClientImpl) Ping(ctx context.Context) error {
 
 // GetDB returns the underlying sql.DB connection.
 func (c *PostgreSQLClientImpl) GetDB() *sql.DB {
-	return c.db
+	return c.db.Load()
 }
 
 // ListDatabases returns a list of all databases on the server.
 func (c *PostgreSQLClientImpl) ListDatabases(ctx context.Context) ([]*DatabaseInfo, error) {
-	if c.db == nil {
+	db := c.db.Load()
+	if db == nil {
 		return nil, ErrNoDatabaseConnection
 	}
 
@@ -189,7 +202,7 @@ func (c *PostgreSQLClientImpl) ListDatabases(ctx context.Context) ([]*DatabaseIn
 		WHERE datistemplate = false
 		ORDER BY datname`
 
-	rows, err := c.db.QueryContext(ctx, query)
+	rows, err := db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list databases: %w", err)
 	}
@@ -197,11 +210,11 @@ func (c *PostgreSQLClientImpl) ListDatabases(ctx context.Context) ([]*DatabaseIn
 
 	var databases []*DatabaseInfo
 	for rows.Next() {
-		var db DatabaseInfo
-		if err := rows.Scan(&db.Name, &db.Owner, &db.Encoding); err != nil {
+		var info DatabaseInfo
+		if err := rows.Scan(&info.Name, &info.Owner, &info.Encoding); err != nil {
 			return nil, fmt.Errorf("failed to scan database row: %w", err)
 		}
-		databases = append(databases, &db)
+		databases = append(databases, &info)
 	}
 
 	if err := rows.Err(); err != nil {
@@ -212,12 +225,13 @@ func (c *PostgreSQLClientImpl) ListDatabases(ctx context.Context) ([]*DatabaseIn
 
 // GetCurrentDatabase returns the name of the current database.
 func (c *PostgreSQLClientImpl) GetCurrentDatabase(ctx context.Context) (string, error) {
-	if c.db == nil {
+	db := c.db.Load()
+	if db == nil {
 		return "", ErrNoDatabaseConnection
 	}
 
 	var dbName string
-	err := c.db.QueryRowContext(ctx, "SELECT current_database()").Scan(&dbName)
+	err := db.QueryRowContext(ctx, "SELECT current_database()").Scan(&dbName)
 	if err != nil {
 		return "", fmt.Errorf("failed to get current database: %w", err)
 	}
@@ -227,7 +241,8 @@ func (c *PostgreSQLClientImpl) GetCurrentDatabase(ctx context.Context) (string, 
 
 // ListSchemas returns a list of schemas in the current database.
 func (c *PostgreSQLClientImpl) ListSchemas(ctx context.Context) ([]*SchemaInfo, error) {
-	if c.db == nil {
+	db := c.db.Load()
+	if db == nil {
 		return nil, ErrNoDatabaseConnection
 	}
 
@@ -237,7 +252,7 @@ func (c *PostgreSQLClientImpl) ListSchemas(ctx context.Context) ([]*SchemaInfo, 
 		WHERE schema_name NOT IN ('information_schema', 'pg_catalog', 'pg_toast')
 		ORDER BY schema_name`
 
-	rows, err := c.db.QueryContext(ctx, query)
+	rows, err := db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list schemas: %w", err)
 	}
@@ -260,7 +275,8 @@ func (c *PostgreSQLClientImpl) ListSchemas(ctx context.Context) ([]*SchemaInfo, 
 
 // ListTables returns a list of tables in the specified schema.
 func (c *PostgreSQLClientImpl) ListTables(ctx context.Context, schema string) ([]*TableInfo, error) {
-	if c.db == nil {
+	db := c.db.Load()
+	if db == nil {
 		return nil, ErrNoDatabaseConnection
 	}
 
@@ -286,7 +302,7 @@ func (c *PostgreSQLClientImpl) ListTables(ctx context.Context, schema string) ([
 		WHERE schemaname = $1
 		ORDER BY tablename`
 
-	rows, err := c.db.QueryContext(ctx, query, schema)
+	rows, err := db.QueryContext(ctx, query, schema)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list tables: %w", err)
 	}
@@ -311,7 +327,8 @@ func (c *PostgreSQLClientImpl) ListTables(ctx context.Context, schema string) ([
 // This eliminates the N+1 query pattern by joining table metadata with pg_stat_user_tables.
 // For tables where statistics show 0 rows, it falls back to COUNT(*) to get actual row counts.
 func (c *PostgreSQLClientImpl) ListTablesWithStats(ctx context.Context, schema string) ([]*TableInfo, error) {
-	if c.db == nil {
+	db := c.db.Load()
+	if db == nil {
 		return nil, ErrNoDatabaseConnection
 	}
 
@@ -351,7 +368,7 @@ func (c *PostgreSQLClientImpl) ListTablesWithStats(ctx context.Context, schema s
 			ON t.schemaname = s.schemaname AND t.tablename = s.relname
 		ORDER BY t.tablename`
 
-	rows, err := c.db.QueryContext(ctx, query, schema)
+	rows, err := db.QueryContext(ctx, query, schema)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list tables with stats: %w", err)
 	}
@@ -380,7 +397,7 @@ func (c *PostgreSQLClientImpl) ListTablesWithStats(ctx context.Context, schema s
 				pq.QuoteIdentifier(table.Schema),
 				pq.QuoteIdentifier(table.Name))
 			var actualCount int64
-			if err := c.db.QueryRowContext(ctx, countQuery).Scan(&actualCount); err != nil {
+			if err := db.QueryRowContext(ctx, countQuery).Scan(&actualCount); err != nil {
 				// Log warning but don't fail the entire operation
 				continue
 			}
@@ -393,7 +410,8 @@ func (c *PostgreSQLClientImpl) ListTablesWithStats(ctx context.Context, schema s
 
 // DescribeTable returns detailed column information for a table.
 func (c *PostgreSQLClientImpl) DescribeTable(ctx context.Context, schema, table string) ([]*ColumnInfo, error) {
-	if c.db == nil {
+	db := c.db.Load()
+	if db == nil {
 		return nil, ErrNoDatabaseConnection
 	}
 
@@ -411,7 +429,7 @@ func (c *PostgreSQLClientImpl) DescribeTable(ctx context.Context, schema, table 
 		WHERE table_schema = $1 AND table_name = $2
 		ORDER BY ordinal_position`
 
-	rows, err := c.db.QueryContext(ctx, query, schema, table)
+	rows, err := db.QueryContext(ctx, query, schema, table)
 	if err != nil {
 		return nil, fmt.Errorf("failed to describe table: %w", err)
 	}
@@ -440,7 +458,8 @@ func (c *PostgreSQLClientImpl) DescribeTable(ctx context.Context, schema, table 
 
 // GetTableStats returns statistics for a specific table.
 func (c *PostgreSQLClientImpl) GetTableStats(ctx context.Context, schema, table string) (*TableInfo, error) {
-	if c.db == nil {
+	db := c.db.Load()
+	if db == nil {
 		return nil, ErrNoDatabaseConnection
 	}
 
@@ -461,7 +480,7 @@ func (c *PostgreSQLClientImpl) GetTableStats(ctx context.Context, schema, table 
 		WHERE schemaname = $1 AND relname = $2`
 
 	var rowCount sql.NullInt64
-	err := c.db.QueryRowContext(ctx, countQuery, schema, table).Scan(&rowCount)
+	err := db.QueryRowContext(ctx, countQuery, schema, table).Scan(&rowCount)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("failed to get table stats: %w", err)
 	}
@@ -475,7 +494,7 @@ func (c *PostgreSQLClientImpl) GetTableStats(ctx context.Context, schema, table 
 			pq.QuoteIdentifier(schema),
 			pq.QuoteIdentifier(table))
 		var actualCount int64
-		err := c.db.QueryRowContext(ctx, actualCountQuery).Scan(&actualCount)
+		err := db.QueryRowContext(ctx, actualCountQuery).Scan(&actualCount)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get actual row count: %w", err)
 		}
@@ -489,7 +508,8 @@ func (c *PostgreSQLClientImpl) GetTableStats(ctx context.Context, schema, table 
 
 // ListIndexes returns a list of indexes for the specified table.
 func (c *PostgreSQLClientImpl) ListIndexes(ctx context.Context, schema, table string) ([]*IndexInfo, error) {
-	if c.db == nil {
+	db := c.db.Load()
+	if db == nil {
 		return nil, ErrNoDatabaseConnection
 	}
 
@@ -515,7 +535,7 @@ func (c *PostgreSQLClientImpl) ListIndexes(ctx context.Context, schema, table st
 		GROUP BY i.relname, t.relname, ix.indisunique, ix.indisprimary, am.amname
 		ORDER BY i.relname`
 
-	rows, err := c.db.QueryContext(ctx, query, schema, table)
+	rows, err := db.QueryContext(ctx, query, schema, table)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list indexes: %w", err)
 	}
@@ -744,11 +764,12 @@ func (c *PostgreSQLClientImpl) ExecuteQuery(ctx context.Context, query string, a
 		return nil, err
 	}
 
-	if c.db == nil {
+	db := c.db.Load()
+	if db == nil {
 		return nil, ErrNoDatabaseConnection
 	}
 
-	rows, err := c.db.QueryContext(ctx, query, args...)
+	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute query: %w", err)
 	}
@@ -780,14 +801,15 @@ func (c *PostgreSQLClientImpl) ExplainQuery(ctx context.Context, query string, a
 		return nil, err
 	}
 
-	if c.db == nil {
+	db := c.db.Load()
+	if db == nil {
 		return nil, ErrNoDatabaseConnection
 	}
 
 	// Construct the EXPLAIN query
 	explainQuery := "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " + query //nolint:gosec // query is validated by validateQuery above (SELECT/WITH only)
 
-	rows, err := c.db.QueryContext(ctx, explainQuery, args...)
+	rows, err := db.QueryContext(ctx, explainQuery, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute explain query: %w", err)
 	}

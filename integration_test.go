@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -775,4 +776,58 @@ func TestIntegration_PoolConfiguration(t *testing.T) {
 
 	stats := db.Stats()
 	assert.Equal(t, 10, stats.MaxOpenConnections, "MaxOpenConns should be 10")
+}
+
+// TestIntegration_ConcurrentQueriesAndReconnect_NoRace_Issue83 verifies that
+// concurrent query goroutines do not race against a goroutine calling Connect
+// (which swaps the underlying *sql.DB pool). Run with `go test -race` to
+// detect the unsynchronized pointer access fixed in issue #83.
+func TestIntegration_ConcurrentQueriesAndReconnect_NoRace_Issue83(t *testing.T) {
+	_, connectionString, cleanup := setupTestContainer(t)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
+	defer cancel()
+
+	client := app.NewPostgreSQLClient()
+	require.NoError(t, client.Connect(ctx, connectionString))
+	defer client.Close()
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+
+	// Query workers: hammer the client with read-only queries.
+	const queryWorkers = 16
+	for range queryWorkers {
+		wg.Go(func() {
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					// Errors during a reconnect window ("sql: database is closed",
+					// transient connection drops) are expected and intentionally
+					// ignored — we only care that no data race is detected.
+					_, _ = client.ExecuteQuery(ctx, "SELECT 1")
+				}
+			}
+		})
+	}
+
+	// Reconnector: periodically swap in a fresh *sql.DB pool, racing the readers.
+	wg.Go(func() {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				_ = client.Connect(ctx, connectionString)
+				time.Sleep(10 * time.Millisecond)
+			}
+		}
+	})
+
+	time.Sleep(500 * time.Millisecond)
+	close(stop)
+	wg.Wait()
 }

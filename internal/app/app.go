@@ -8,6 +8,7 @@ import (
 	"os"
 
 	"github.com/sylvain/postgresql-mcp/internal/logger"
+	"golang.org/x/sync/singleflight"
 )
 
 // Constants for default values.
@@ -39,9 +40,14 @@ type ExecuteQueryOptions struct {
 }
 
 // App represents the main application structure.
+//
+// reconnectGroup dedupes concurrent reconnect attempts so that N handler
+// goroutines observing the same connection failure trigger only one
+// underlying Connect call (issue #83).
 type App struct {
-	client PostgreSQLClient
-	logger *slog.Logger
+	client         PostgreSQLClient
+	logger         *slog.Logger
+	reconnectGroup singleflight.Group
 }
 
 // New creates a new App instance with the provided PostgreSQLClient.
@@ -383,14 +389,16 @@ func (a *App) tryConnect(ctx context.Context) error {
 //
 // This method is called before every database operation to provide transparent
 // connection recovery. If the connection ping fails, it attempts to reconnect
-// once using the original connection parameters from POSTGRES_URL or DATABASE_URL
+// using the original connection parameters from POSTGRES_URL or DATABASE_URL
 // environment variables.
 //
 // Reconnection behavior:
-//   - Single reconnection attempt per operation (no retries or backoff)
-//   - Uses a background context so reconnection is not cancelled by request timeout
-//   - Logs reconnection attempts at Debug level and results at Info/Error level
-//   - Returns ErrConnectionRequired if the client is nil or reconnection fails
+//   - Concurrent reconnect attempts are deduped via singleflight, so N handlers
+//     observing the same failure trigger only one underlying Connect (issue #83).
+//   - Uses a background context so reconnection is not cancelled by request timeout.
+//   - Followers honor their own request ctx and may abort while the leader runs.
+//   - Logs reconnection attempts at Debug level and results at Info/Error level.
+//   - Returns ErrConnectionRequired if the client is nil or reconnection fails.
 //
 // Operations may experience a slight delay during reconnection. For environments
 // where connection stability is critical, configure shorter pool lifetimes via
@@ -400,22 +408,51 @@ func (a *App) ensureConnection(ctx context.Context) error {
 		return ErrConnectionRequired
 	}
 
-	// Test current connection with request context
-	if err := a.client.Ping(ctx); err != nil {
-		a.logger.Debug("Database connection lost, attempting to reconnect", "error", err)
-
-		// Attempt to reconnect using background context
-		// Reconnection is infrastructure work and shouldn't be cancelled by request timeout
-		reconnectCtx := context.Background()
-		if reconnectErr := a.tryConnect(reconnectCtx); reconnectErr != nil { //nolint:contextcheck // Intentional: reconnection must not be cancelled by request context
-			a.logger.Error("Failed to reconnect to database", "ping_error", err, "reconnect_error", reconnectErr)
-			return ErrConnectionRequired
-		}
-
-		a.logger.Info("Successfully reconnected to database")
+	// Fast path: current connection is healthy.
+	if err := a.client.Ping(ctx); err == nil {
+		return nil
 	}
 
-	return nil
+	// Slow path: dedupe concurrent reconnect attempts.
+	ch := a.reconnectGroup.DoChan("reconnect", a.doReconnect)
+	select {
+	case res := <-ch:
+		if res.Err != nil {
+			return ErrConnectionRequired
+		}
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("waiting for reconnect: %w", ctx.Err())
+	}
+}
+
+// reconnectResult is the singleflight payload for doReconnect. It carries no
+// data; only the error is meaningful. A typed value is returned (rather than
+// nil) so the singleflight callback satisfies linters that forbid (nil, nil).
+type reconnectResult struct{}
+
+// doReconnect is the singleflight leader callback for ensureConnection.
+// Only one goroutine runs this at a time per key; concurrent callers share
+// its result.
+func (a *App) doReconnect() (any, error) {
+	// Reconnection is infrastructure work and must not be cancelled by any
+	// individual request context.
+	reconnectCtx := context.Background()
+
+	// Re-check inside the leader: another reconnect (e.g. manual
+	// connect_database) may have already succeeded between our outer Ping
+	// failure and acquiring leadership.
+	if err := a.client.Ping(reconnectCtx); err == nil {
+		return reconnectResult{}, nil
+	}
+
+	a.logger.Debug("Database connection lost, attempting to reconnect")
+	if err := a.tryConnect(reconnectCtx); err != nil {
+		a.logger.Error("Failed to reconnect to database", "error", err)
+		return reconnectResult{}, err
+	}
+	a.logger.Info("Successfully reconnected to database")
+	return reconnectResult{}, nil
 }
 
 // logSecurityEvent logs a security-relevant event (e.g., rejected query)
