@@ -565,7 +565,7 @@ func TestIntegration_App_ExplainQuery(t *testing.T) {
 	require.NoError(t, err)
 
 	// Test EXPLAIN query
-	result, err := appInstance.ExplainQuery(ctx, "SELECT * FROM test_mcp_schema.test_users WHERE active = true")
+	result, err := appInstance.ExplainQuery(ctx, "SELECT * FROM test_mcp_schema.test_users WHERE active = true", false)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -755,7 +755,7 @@ func TestIntegration_ReadOnlyEnforcement(t *testing.T) {
 	assert.Contains(t, err.Error(), "multi-statement")
 
 	// EXPLAIN ANALYZE on SELECT should still work in read-only mode
-	_, err = client.ExplainQuery(ctx, "SELECT 1")
+	_, err = client.ExplainQuery(ctx, "SELECT 1", true)
 	assert.NoError(t, err)
 }
 

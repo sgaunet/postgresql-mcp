@@ -367,8 +367,12 @@ func (a *App) GetCurrentDatabase(ctx context.Context) (string, error) {
 	return dbName, nil
 }
 
-// ExplainQuery returns the execution plan for a query.
-func (a *App) ExplainQuery(ctx context.Context, query string, args ...any) (*QueryResult, error) {
+// ExplainQuery returns the execution plan for a query. When analyze is false
+// (the default for the explain_query MCP tool) the plan is non-executing
+// (EXPLAIN FORMAT JSON); when true it runs EXPLAIN (ANALYZE, BUFFERS, …)
+// which executes the query — bounded by ctx — and may carry the same cost
+// as the underlying SELECT. See issue #89.
+func (a *App) ExplainQuery(ctx context.Context, query string, analyze bool, args ...any) (*QueryResult, error) {
 	if err := a.ensureConnection(ctx); err != nil {
 		return nil, fmt.Errorf("failed to explain query: %w", err)
 	}
@@ -377,9 +381,9 @@ func (a *App) ExplainQuery(ctx context.Context, query string, args ...any) (*Que
 		return nil, ErrQueryRequired
 	}
 
-	a.logger.Debug("Explaining query", "query", truncateQuery(query, maxQueryLogLen))
+	a.logger.Debug("Explaining query", "query", truncateQuery(query, maxQueryLogLen), "analyze", analyze)
 
-	result, err := a.client.ExplainQuery(ctx, query, args...)
+	result, err := a.client.ExplainQuery(ctx, query, analyze, args...)
 	if err != nil {
 		if errors.Is(err, ErrResultTooLarge) {
 			a.logSecurityEvent("result_too_large", query, err)

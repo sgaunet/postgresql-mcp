@@ -122,8 +122,11 @@ type QueryExecutor interface {
 	// ExecuteQuery runs a validated SELECT/WITH query and returns the result set.
 	// Queries are validated for safety (no mutations, no multi-statement, size limits).
 	ExecuteQuery(ctx context.Context, query string, args ...any) (*QueryResult, error)
-	// ExplainQuery returns the EXPLAIN ANALYZE execution plan for a query as JSON.
-	ExplainQuery(ctx context.Context, query string, args ...any) (*QueryResult, error)
+	// ExplainQuery returns the execution plan for a query as JSON. When analyze
+	// is false the plan is non-executing (EXPLAIN FORMAT JSON); when true it
+	// runs EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON), which actually executes
+	// the query and is bounded by the caller's context (issue #89).
+	ExplainQuery(ctx context.Context, query string, analyze bool, args ...any) (*QueryResult, error)
 }
 
 // PostgreSQLClient combines all database operations into a single read-only interface.
