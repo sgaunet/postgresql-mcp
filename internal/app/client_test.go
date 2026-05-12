@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -11,36 +10,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
 )
-
-// MockDB represents a mock database connection for testing
-type MockDB struct {
-	mock.Mock
-}
-
-func (m *MockDB) Query(query string, args ...interface{}) (*sql.Rows, error) {
-	mockArgs := m.Called(query, args)
-	if rows, ok := mockArgs.Get(0).(*sql.Rows); ok {
-		return rows, mockArgs.Error(1)
-	}
-	return nil, mockArgs.Error(1)
-}
-
-func (m *MockDB) QueryRow(query string, args ...interface{}) *sql.Row {
-	mockArgs := m.Called(query, args)
-	return mockArgs.Get(0).(*sql.Row)
-}
-
-func (m *MockDB) Ping() error {
-	args := m.Called()
-	return args.Error(0)
-}
-
-func (m *MockDB) Close() error {
-	args := m.Called()
-	return args.Error(0)
-}
 
 func TestNewPostgreSQLClient(t *testing.T) {
 	client := NewPostgreSQLClient()

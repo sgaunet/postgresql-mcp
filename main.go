@@ -21,6 +21,12 @@ import (
 // Version information injected at build time.
 var version = "dev"
 
+// MCP parameter names and log attribute keys reused across tool handlers.
+const (
+	schemaKey = "schema"
+	tableKey  = "table"
+)
+
 // Error variables for static errors.
 var (
 	ErrInvalidConnectionParameters = errors.New("invalid connection parameters")
@@ -271,7 +277,7 @@ func setupListSchemasTool(s *server.MCPServer, appInstance *app.App, debugLogger
 func setupListTablesTool(s *server.MCPServer, appInstance *app.App, debugLogger *slog.Logger) {
 	listTablesTool := mcp.NewTool("list_tables",
 		mcp.WithDescription("List tables in a specific schema"),
-		mcp.WithString("schema",
+		mcp.WithString(schemaKey,
 			mcp.Description(fmt.Sprintf("Schema name to list tables from (default: %s)", app.DefaultSchema)),
 		),
 		mcp.WithBoolean("include_size",
@@ -286,7 +292,7 @@ func setupListTablesTool(s *server.MCPServer, appInstance *app.App, debugLogger 
 		// Extract options
 		opts := &app.ListTablesOptions{}
 
-		if schema, ok := args["schema"].(string); ok && schema != "" {
+		if schema, ok := args[schemaKey].(string); ok && schema != "" {
 			opts.Schema = schema
 		}
 
@@ -294,7 +300,7 @@ func setupListTablesTool(s *server.MCPServer, appInstance *app.App, debugLogger 
 			opts.IncludeSize = includeSize
 		}
 
-		debugLogger.Debug("Processing list_tables request", "schema", opts.Schema, "include_size", opts.IncludeSize)
+		debugLogger.Debug("Processing list_tables request", schemaKey, opts.Schema, "include_size", opts.IncludeSize)
 
 		// List tables
 		tables, err := appInstance.ListTables(ctx, opts)
@@ -310,7 +316,7 @@ func setupListTablesTool(s *server.MCPServer, appInstance *app.App, debugLogger 
 			return mcp.NewToolResultError("Failed to format tables response"), nil
 		}
 
-		debugLogger.Info("Successfully listed tables", "count", len(tables), "schema", opts.Schema)
+		debugLogger.Info("Successfully listed tables", "count", len(tables), schemaKey, opts.Schema)
 		return mcp.NewToolResultText(string(jsonData)), nil
 	})
 }
@@ -322,19 +328,19 @@ func handleTableSchemaToolRequest(
 	toolName string,
 ) (string, string, error) {
 	// Extract table name (required)
-	table, ok := args["table"].(string)
+	table, ok := args[tableKey].(string)
 	if !ok || table == "" {
-		debugLogger.Error("table name is missing or not a string", "value", args["table"], "tool", toolName)
+		debugLogger.Error("table name is missing or not a string", "value", args[tableKey], "tool", toolName)
 		return "", "", app.ErrTableRequired
 	}
 
 	// Extract schema (optional)
 	schema := app.DefaultSchema
-	if schemaArg, ok := args["schema"].(string); ok && schemaArg != "" {
+	if schemaArg, ok := args[schemaKey].(string); ok && schemaArg != "" {
 		schema = schemaArg
 	}
 
-	debugLogger.Debug(fmt.Sprintf("Processing %s request", toolName), "schema", schema, "table", table)
+	debugLogger.Debug(fmt.Sprintf("Processing %s request", toolName), schemaKey, schema, tableKey, table)
 	return table, schema, nil
 }
 
@@ -362,11 +368,11 @@ type TableToolConfig struct {
 func setupTableTool(s *server.MCPServer, appInstance *app.App, debugLogger *slog.Logger, config TableToolConfig) {
 	tool := mcp.NewTool(config.Name,
 		mcp.WithDescription(config.Description),
-		mcp.WithString("table",
+		mcp.WithString(tableKey,
 			mcp.Required(),
 			mcp.Description(config.TableDesc),
 		),
-		mcp.WithString("schema",
+		mcp.WithString(schemaKey,
 			mcp.Description(fmt.Sprintf("Schema name (default: %s)", app.DefaultSchema)),
 		),
 	)
@@ -382,7 +388,7 @@ func setupTableTool(s *server.MCPServer, appInstance *app.App, debugLogger *slog
 
 		result, err := config.Operation(ctx, appInstance, schema, table)
 		if err != nil {
-			debugLogger.Error("Failed to "+config.ErrorMsg, "error", err, "schema", schema, "table", table)
+			debugLogger.Error("Failed to "+config.ErrorMsg, "error", err, schemaKey, schema, tableKey, table)
 			return mcp.NewToolResultError(fmt.Sprintf("Failed to %s: %v", config.ErrorMsg, err)), nil
 		}
 
@@ -411,7 +417,7 @@ func setupDescribeTableTool(s *server.MCPServer, appInstance *app.App, debugLogg
 			if !ok {
 				return "Error processing result", []any{"error", "type assertion failed"}
 			}
-			return "Successfully described table", []any{"column_count", len(columns), "schema", schema, "table", table}
+			return "Successfully described table", []any{"column_count", len(columns), schemaKey, schema, tableKey, table}
 		},
 		ErrorMsg: "describe table",
 	})
@@ -485,7 +491,7 @@ func setupListIndexesTool(s *server.MCPServer, appInstance *app.App, debugLogger
 			if !ok {
 				return "Error processing result", []any{"error", "type assertion failed"}
 			}
-			return "Successfully listed indexes", []any{"count", len(indexes), "schema", schema, "table", table}
+			return "Successfully listed indexes", []any{"count", len(indexes), schemaKey, schema, tableKey, table}
 		},
 		ErrorMsg: "list indexes",
 	})
@@ -543,7 +549,7 @@ func setupGetTableStatsTool(s *server.MCPServer, appInstance *app.App, debugLogg
 			return appInstance.GetTableStats(ctx, schema, table)
 		},
 		SuccessMsg: func(_ any, schema, table string) (string, []any) {
-			return "Successfully retrieved table stats", []any{"schema", schema, "table", table}
+			return "Successfully retrieved table stats", []any{schemaKey, schema, tableKey, table}
 		},
 		ErrorMsg: "get table stats",
 	})
