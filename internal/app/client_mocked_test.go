@@ -97,10 +97,9 @@ func TestPostgreSQLClient_QueryValidationLogic(t *testing.T) {
 			shouldAllow: true,
 		},
 		{
-			name:          "select lowercase",
-			query:         "select * from users",
-			shouldAllow:   false,
-			expectedError: "only SELECT and WITH queries are allowed",
+			name:        "select lowercase is allowed (validator is case-insensitive)",
+			query:       "select * from users",
+			shouldAllow: true,
 		},
 		{
 			name:          "INSERT query",
@@ -130,19 +129,18 @@ func TestPostgreSQLClient_QueryValidationLogic(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Test the validation logic that would happen in ExecuteQuery
-			// by calling it without a real database connection
+			// Validation must run before the connection check so that
+			// disallowed queries are rejected with a clear error even when
+			// the client is disconnected (issue #99).
 			_, err := client.ExecuteQuery(context.Background(), tt.query)
 
+			assert.Error(t, err)
 			if tt.shouldAllow {
-				// Should fail with connection error, not validation error
-				assert.Error(t, err)
+				// SELECT/WITH passes validation; fails on missing connection.
 				assert.Contains(t, err.Error(), "no database connection")
 			} else {
-				// Should fail with validation error even before checking connection
-				// But our current implementation checks connection first, so we expect connection error
-				assert.Error(t, err)
-				assert.Contains(t, err.Error(), "no database connection")
+				// Validation error surfaces regardless of connection state.
+				assert.Contains(t, err.Error(), tt.expectedError)
 			}
 		})
 	}

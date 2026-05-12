@@ -268,7 +268,7 @@ func TestPostgreSQLClient_ExecuteQueryInvalidQueries(t *testing.T) {
 			name:        "Query with mixed case",
 			query:       "select * from users",
 			expectError: true,
-			errorMsg:    "only SELECT and WITH queries are allowed",
+			errorMsg:    "no database connection",
 		},
 	}
 
@@ -277,11 +277,9 @@ func TestPostgreSQLClient_ExecuteQueryInvalidQueries(t *testing.T) {
 			result, err := client.ExecuteQuery(context.Background(), tt.query)
 			if tt.expectError {
 				assert.Error(t, err)
-				if tt.errorMsg == "only SELECT and WITH queries are allowed" {
-					assert.Contains(t, err.Error(), "no database connection")
-				} else {
-					assert.Contains(t, err.Error(), tt.errorMsg)
-				}
+				// Validation now runs before the connection check (issue #99),
+				// so the real validation error surfaces regardless of state.
+				assert.Contains(t, err.Error(), tt.errorMsg)
 				assert.Nil(t, result)
 			} else {
 				assert.NoError(t, err)
@@ -289,6 +287,40 @@ func TestPostgreSQLClient_ExecuteQueryInvalidQueries(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestPostgreSQLClient_ValidationRunsBeforeConnectionCheck_Issue99 asserts
+// that disallowed queries are rejected with the real validation error even
+// when the client has no database connection. Regression for issue #99
+// (validation was previously masked by the early "no database connection"
+// check, so callers saw misleading errors and security checks did not run
+// on disconnected clients).
+func TestPostgreSQLClient_ValidationRunsBeforeConnectionCheck_Issue99(t *testing.T) {
+	client := &PostgreSQLClientImpl{} // c.db is nil
+
+	t.Run("ExecuteQuery rejects DELETE before connection check", func(t *testing.T) {
+		_, err := client.ExecuteQuery(context.Background(), "DELETE FROM users")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "only SELECT and WITH queries are allowed")
+	})
+
+	t.Run("ExplainQuery rejects DROP before connection check", func(t *testing.T) {
+		_, err := client.ExplainQuery(context.Background(), "DROP TABLE users")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "only SELECT and WITH queries are allowed")
+	})
+
+	t.Run("ExecuteQuery still reports missing connection for valid queries", func(t *testing.T) {
+		_, err := client.ExecuteQuery(context.Background(), "SELECT 1")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "no database connection")
+	})
+
+	t.Run("ExplainQuery still reports missing connection for valid queries", func(t *testing.T) {
+		_, err := client.ExplainQuery(context.Background(), "SELECT 1")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "no database connection")
+	})
 }
 
 func TestPostgreSQLClient_ExplainQueryWithoutConnection(t *testing.T) {

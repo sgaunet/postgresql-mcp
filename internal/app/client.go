@@ -740,12 +740,12 @@ func processRows(rows *sql.Rows, maxRows int) ([][]any, error) {
 
 // ExecuteQuery executes a SELECT query and returns the results.
 func (c *PostgreSQLClientImpl) ExecuteQuery(ctx context.Context, query string, args ...any) (*QueryResult, error) {
-	if c.db == nil {
-		return nil, ErrNoDatabaseConnection
-	}
-
 	if err := validateQuery(query); err != nil {
 		return nil, err
+	}
+
+	if c.db == nil {
+		return nil, ErrNoDatabaseConnection
 	}
 
 	rows, err := c.db.QueryContext(ctx, query, args...)
@@ -776,12 +776,12 @@ func (c *PostgreSQLClientImpl) ExecuteQuery(ctx context.Context, query string, a
 
 // ExplainQuery returns the execution plan for a query.
 func (c *PostgreSQLClientImpl) ExplainQuery(ctx context.Context, query string, args ...any) (*QueryResult, error) {
-	if c.db == nil {
-		return nil, ErrNoDatabaseConnection
-	}
-
 	if err := validateQuery(query); err != nil {
 		return nil, err
+	}
+
+	if c.db == nil {
+		return nil, ErrNoDatabaseConnection
 	}
 
 	// Construct the EXPLAIN query
