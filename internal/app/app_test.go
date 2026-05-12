@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 // MockPostgreSQLClient is a mock implementation of PostgreSQLClient for testing
@@ -679,4 +680,83 @@ func TestTruncateQuery(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+// TestApp_ReconnectUsesStickyConnectionString_Issue87 verifies that after an
+// explicit Connect (e.g. via the connect_database tool), an auto-reconnect
+// triggered by a ping failure re-uses the originally-supplied connection
+// string instead of silently falling back to POSTGRES_URL / DATABASE_URL.
+// Without this fix, a network blip could switch the session to a different
+// database (issue #87).
+func TestApp_ReconnectUsesStickyConnectionString_Issue87(t *testing.T) {
+	const explicitConn = "postgres://userA:pw@host-a:5432/dbA"
+	const envFallback = "postgres://userB:pw@host-b:5432/dbB"
+
+	mockClient := &MockPostgreSQLClient{}
+	app := New(mockClient)
+
+	// Initial explicit Connect: App.Connect first calls Ping (to decide
+	// whether to Close an existing pool); we return an error so Close is
+	// skipped. Then it calls Connect with our explicit string.
+	mockClient.On("Ping", mock.Anything).Return(errors.New("no connection")).Once()
+	mockClient.On("Connect", mock.Anything, explicitConn).Return(nil)
+
+	require.NoError(t, app.Connect(context.Background(), explicitConn))
+
+	// Set an env var pointing at a DIFFERENT database — the dangerous
+	// scenario from the issue. The fix must not let this override the
+	// caller's explicit choice.
+	t.Setenv("POSTGRES_URL", envFallback)
+
+	// Sever the connection: every subsequent Ping fails.
+	mockClient.On("Ping", mock.Anything).Return(errors.New("connection lost"))
+
+	require.NoError(t, app.ensureConnection(context.Background()))
+
+	// Every Connect call must have targeted the explicit string. If the bug
+	// were present, a reconnect with `envFallback` would be issued and the
+	// mock — which has no expectation for that argument — would surface it
+	// as an unexpected Call entry.
+	var connectArgs []string
+	for _, call := range mockClient.Calls {
+		if call.Method == "Connect" {
+			connectArgs = append(connectArgs, call.Arguments[1].(string))
+		}
+	}
+	require.Len(t, connectArgs, 2, "expected initial Connect + one reconnect")
+	for _, arg := range connectArgs {
+		assert.Equal(t, explicitConn, arg,
+			"reconnect must reuse the explicit connection string, not env fallback (issue #87)")
+	}
+}
+
+// TestApp_ReconnectFallsBackToEnvOnInitialBootstrap verifies that the env-var
+// fallback still applies when no prior Connect has been made — i.e. for the
+// very first connection of a fresh process where the user has set POSTGRES_URL
+// instead of calling connect_database. This is the legitimate complement to
+// the sticky-session behavior.
+func TestApp_ReconnectFallsBackToEnvOnInitialBootstrap(t *testing.T) {
+	const envConn = "postgres://user:pw@host:5432/db"
+
+	mockClient := &MockPostgreSQLClient{}
+	app := New(mockClient)
+
+	t.Setenv("POSTGRES_URL", envConn)
+
+	// No prior Connect → connStr is empty → tryConnect must fall back to env.
+	// App.Connect's internal Ping (existing-conn check) returns err → skip Close.
+	mockClient.On("Ping", mock.Anything).Return(errors.New("no connection"))
+	mockClient.On("Connect", mock.Anything, envConn).Return(nil)
+
+	require.NoError(t, app.ensureConnection(context.Background()))
+
+	var connectArgs []string
+	for _, call := range mockClient.Calls {
+		if call.Method == "Connect" {
+			connectArgs = append(connectArgs, call.Arguments[1].(string))
+		}
+	}
+	require.Len(t, connectArgs, 1)
+	assert.Equal(t, envConn, connectArgs[0],
+		"initial bootstrap (no prior session) must still honor POSTGRES_URL")
 }
