@@ -8,8 +8,11 @@ import (
 	"fmt"
 	"log"
 	"log/slog"
+	"net"
+	"net/url"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -33,7 +36,20 @@ var (
 	ErrHostRequired                = errors.New("host is required")
 	ErrUserRequired                = errors.New("user is required")
 	ErrDatabaseRequired            = errors.New("database is required")
+	ErrInvalidSSLMode              = errors.New("invalid sslmode")
 )
+
+// validSSLModes is the libpq-recognised allowlist for the sslmode parameter.
+// Any other value would either silently downgrade TLS or, when crafted as
+// e.g. "prefer&extra=value", inject unintended URL parameters (issue #86).
+var validSSLModes = map[string]struct{}{
+	"disable":     {},
+	"allow":       {},
+	"prefer":      {},
+	"require":     {},
+	"verify-ca":   {},
+	"verify-full": {},
+}
 
 // ConnectionParams represents individual database connection parameters.
 type ConnectionParams struct {
@@ -45,8 +61,14 @@ type ConnectionParams struct {
 	SSLMode  string
 }
 
-// buildConnectionString builds a PostgreSQL connection URL from individual parameters.
-// Returns the connection string or an error if required parameters are missing.
+// buildConnectionString builds a PostgreSQL connection URL from individual
+// parameters. Credentials are percent-encoded via net/url so passwords
+// containing @, /, ?, or # round-trip correctly; sslmode is validated
+// against the libpq allowlist so a crafted value cannot inject extra URL
+// parameters or silently downgrade TLS (issue #86).
+//
+// Returns an error if a required parameter is missing or if sslmode is not
+// one of: disable, allow, prefer, require, verify-ca, verify-full.
 func buildConnectionString(params ConnectionParams) (string, error) {
 	// Validate required parameters
 	if params.Host == "" {
@@ -69,19 +91,24 @@ func buildConnectionString(params ConnectionParams) (string, error) {
 	if sslMode == "" {
 		sslMode = "prefer" // PostgreSQL default SSL mode
 	}
+	if _, ok := validSSLModes[sslMode]; !ok {
+		return "", fmt.Errorf("%w: %q (allowed: disable, allow, prefer, require, verify-ca, verify-full)",
+			ErrInvalidSSLMode, sslMode)
+	}
 
-	// Build connection string using net.JoinHostPort pattern
-	hostPort := fmt.Sprintf("%s:%d", params.Host, port)
-	connStr := fmt.Sprintf(
-		"postgres://%s:%s@%s/%s?sslmode=%s",
-		params.User,
-		params.Password,
-		hostPort,
-		params.Database,
-		sslMode,
-	)
-
-	return connStr, nil
+	// Build via net/url so credentials and host are encoded correctly. Use
+	// UserPassword unconditionally (even with empty password) so the URL
+	// keeps the "user:@host" shape callers expect.
+	u := &url.URL{
+		Scheme: "postgres",
+		User:   url.UserPassword(params.User, params.Password),
+		Host:   net.JoinHostPort(params.Host, strconv.Itoa(port)),
+		Path:   "/" + params.Database,
+	}
+	q := u.Query()
+	q.Set("sslmode", sslMode)
+	u.RawQuery = q.Encode()
+	return u.String(), nil
 }
 
 // extractConnectionParams extracts connection parameters from args.
