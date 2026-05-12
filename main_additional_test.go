@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
@@ -632,6 +633,74 @@ func TestBuildConnectionString_EncodesSpecialCharactersInPassword(t *testing.T) 
 			assert.Equal(t, pw, gotPw, "round-tripped password must match original")
 			assert.Equal(t, "host:5432", u.Host, "host/port must not be split by password content")
 			assert.Equal(t, "/db", u.Path, "path must not be split by password content")
+		})
+	}
+}
+
+// TestSafeConnectArgs_RedactsSensitiveFields asserts that the connect_database
+// debug-log sanitizer keeps only the non-sensitive metadata (host, port,
+// database, sslmode) and drops password, user, and connection_url — even
+// when rendered by slog (issue #85).
+func TestSafeConnectArgs_RedactsSensitiveFields(t *testing.T) {
+	args := map[string]any{
+		"host":           "db.example.com",
+		"port":           float64(5432),
+		"user":           "admin",
+		"password":       "s3cret",
+		"database":       "prod",
+		"sslmode":        "require",
+		"connection_url": "postgres://admin:s3cret@db.example.com/prod",
+	}
+
+	safe := safeConnectArgs(args)
+
+	assert.Equal(t, "db.example.com", safe["host"])
+	assert.InDelta(t, 5432.0, safe["port"], 0)
+	assert.Equal(t, "prod", safe["database"])
+	assert.Equal(t, "require", safe["sslmode"])
+
+	_, hasPassword := safe["password"]
+	_, hasUser := safe["user"]
+	_, hasURL := safe["connection_url"]
+	assert.False(t, hasPassword, "password must be stripped from log-safe args")
+	assert.False(t, hasUser, "user must be stripped from log-safe args")
+	assert.False(t, hasURL, "connection_url must be stripped from log-safe args")
+
+	// Defense in depth: the slog rendering of the sanitized map must not
+	// contain the password string anywhere — covers any future field order
+	// change or formatter quirk.
+	var buf bytes.Buffer
+	slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})).
+		Debug("connect", "args", safe)
+	assert.NotContains(t, buf.String(), "s3cret", "log output leaked password")
+	assert.NotContains(t, buf.String(), "admin", "log output leaked username")
+}
+
+// TestResolveLogLevel covers the env-var-driven log level so production
+// deployments stop emitting debug logs by default (issue #85).
+func TestResolveLogLevel(t *testing.T) {
+	tests := []struct {
+		name string
+		env  string
+		want string
+	}{
+		{"unset defaults to info", "", "info"},
+		{"explicit info", "info", "info"},
+		{"explicit debug", "debug", "debug"},
+		{"uppercase folded", "DEBUG", "debug"},
+		{"mixed case folded", "Warn", "warn"},
+		{"whitespace trimmed", "  error  ", "error"},
+		{"unknown passthrough", "verbose", "verbose"},
+	}
+
+	const key = "POSTGRES_MCP_LOG_LEVEL"
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv(key, tt.env)
+			if tt.env == "" {
+				require.NoError(t, os.Unsetenv(key))
+			}
+			assert.Equal(t, tt.want, resolveLogLevel())
 		})
 	}
 }
