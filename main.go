@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"syscall"
 
+	"github.com/lib/pq"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/sylvain/postgresql-mcp/internal/app"
@@ -184,8 +185,12 @@ func handleConnectDatabaseRequest(
 
 	// Attempt to connect
 	if err := appInstance.Connect(ctx, connectionString); err != nil {
+		// Issue #88: pre-auth errors leak host/port (*net.OpError), username,
+		// and auth method (*pq.Error.Message). Return a fixed generic
+		// message regardless of error class; the full chain is logged above.
 		debugLogger.Error("Failed to connect to database", "error", err)
-		return mcp.NewToolResultError(fmt.Sprintf("Failed to connect to database: %v", err)), nil
+		return mcp.NewToolResultError(
+			"Failed to connect to database. Verify connection parameters and check server logs for details."), nil
 	}
 
 	// Get current database name to confirm connection
@@ -257,7 +262,7 @@ func setupListDatabasesTool(s *server.MCPServer, appInstance *app.App, debugLogg
 		databases, err := appInstance.ListDatabases(ctx)
 		if err != nil {
 			debugLogger.Error("Failed to list databases", "error", err)
-			return mcp.NewToolResultError(fmt.Sprintf("Failed to list databases: %v", err)), nil
+			return mcp.NewToolResultError(publicError("Failed to list databases", err)), nil
 		}
 
 		// Convert to JSON
@@ -285,7 +290,7 @@ func setupListSchemasTool(s *server.MCPServer, appInstance *app.App, debugLogger
 		schemas, err := appInstance.ListSchemas(ctx)
 		if err != nil {
 			debugLogger.Error("Failed to list schemas", "error", err)
-			return mcp.NewToolResultError(fmt.Sprintf("Failed to list schemas: %v", err)), nil
+			return mcp.NewToolResultError(publicError("Failed to list schemas", err)), nil
 		}
 
 		// Convert to JSON
@@ -333,7 +338,7 @@ func setupListTablesTool(s *server.MCPServer, appInstance *app.App, debugLogger 
 		tables, err := appInstance.ListTables(ctx, opts)
 		if err != nil {
 			debugLogger.Error("Failed to list tables", "error", err)
-			return mcp.NewToolResultError(fmt.Sprintf("Failed to list tables: %v", err)), nil
+			return mcp.NewToolResultError(publicError("Failed to list tables", err)), nil
 		}
 
 		// Convert to JSON
@@ -381,6 +386,24 @@ func marshalToJSON(data any, debugLogger *slog.Logger, errorMsg string) ([]byte,
 	return jsonData, nil
 }
 
+// publicError formats an error for the MCP caller while suppressing the
+// server-version, host/port, schema/table/column, and source-location fields
+// exposed by *pq.Error. Only Message and the SQLSTATE Code.Name() survive;
+// Detail, Hint, Where, Routine, File, Line, Schema, Table, Column,
+// DataTypeName, and Constraint are dropped. Non-pq errors are passed through
+// unchanged — at the call sites that use this helper they are app-level
+// sentinels (e.g. ErrConnectionRequired, ErrQueryRequired) or
+// already-curated wrapped errors. The full error chain is preserved in the
+// internal log (the caller logs err immediately before calling publicError).
+// See issue #88.
+func publicError(prefix string, err error) string {
+	var pqErr *pq.Error
+	if errors.As(err, &pqErr) {
+		return fmt.Sprintf("%s: %s (SQLSTATE %s)", prefix, pqErr.Message, pqErr.Code.Name())
+	}
+	return fmt.Sprintf("%s: %s", prefix, err.Error())
+}
+
 // TableToolConfig holds configuration for table-based tools.
 type TableToolConfig struct {
 	Name        string
@@ -416,7 +439,7 @@ func setupTableTool(s *server.MCPServer, appInstance *app.App, debugLogger *slog
 		result, err := config.Operation(ctx, appInstance, schema, table)
 		if err != nil {
 			debugLogger.Error("Failed to "+config.ErrorMsg, "error", err, schemaKey, schema, tableKey, table)
-			return mcp.NewToolResultError(fmt.Sprintf("Failed to %s: %v", config.ErrorMsg, err)), nil
+			return mcp.NewToolResultError(publicError("Failed to "+config.ErrorMsg, err)), nil
 		}
 
 		jsonData, err := marshalToJSON(result, debugLogger, fmt.Sprintf("Failed to format %s response", config.Name))
@@ -489,7 +512,7 @@ func setupExecuteQueryTool(s *server.MCPServer, appInstance *app.App, debugLogge
 		result, err := appInstance.ExecuteQuery(ctx, opts)
 		if err != nil {
 			debugLogger.Error("Failed to execute query", "error", err, "query", query)
-			return mcp.NewToolResultError(fmt.Sprintf("Failed to execute query: %v", err)), nil
+			return mcp.NewToolResultError(publicError("Failed to execute query", err)), nil
 		}
 
 		// Convert to JSON
@@ -551,7 +574,7 @@ func setupExplainQueryTool(s *server.MCPServer, appInstance *app.App, debugLogge
 		result, err := appInstance.ExplainQuery(ctx, query)
 		if err != nil {
 			debugLogger.Error("Failed to explain query", "error", err, "query", query)
-			return mcp.NewToolResultError(fmt.Sprintf("Failed to explain query: %v", err)), nil
+			return mcp.NewToolResultError(publicError("Failed to explain query", err)), nil
 		}
 
 		// Convert to JSON

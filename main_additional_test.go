@@ -2,13 +2,20 @@ package main
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"flag"
+	"fmt"
+	"log/slog"
 	"net/url"
 	"os"
 	"testing"
 
+	"github.com/lib/pq"
+	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/sylvain/postgresql-mcp/internal/app"
 )
 
 // Test the command line flag handling functions directly
@@ -411,6 +418,180 @@ func TestBuildConnectionString_RejectsInvalidSSLMode(t *testing.T) {
 			require.Error(t, err)
 			assert.ErrorIs(t, err, ErrInvalidSSLMode)
 		})
+	}
+}
+
+// stubFailingClient is a minimal app.PostgreSQLClient where Connect returns
+// a configurable error and Ping always reports "not connected" (so
+// app.Connect skips the existing-connection Close branch). All other
+// interface methods return a sentinel error; this stub is only meant for
+// the connect-path leak test below.
+type stubFailingClient struct {
+	connectErr error
+}
+
+func (s *stubFailingClient) Connect(_ context.Context, _ string) error { return s.connectErr }
+func (s *stubFailingClient) Close() error                              { return nil }
+func (s *stubFailingClient) Ping(_ context.Context) error              { return errors.New("stub: not connected") }
+func (s *stubFailingClient) GetDB() *sql.DB                            { return nil }
+func (s *stubFailingClient) ListDatabases(_ context.Context) ([]*app.DatabaseInfo, error) {
+	return nil, errors.New("stub")
+}
+func (s *stubFailingClient) GetCurrentDatabase(_ context.Context) (string, error) {
+	return "", errors.New("stub")
+}
+func (s *stubFailingClient) ListSchemas(_ context.Context) ([]*app.SchemaInfo, error) {
+	return nil, errors.New("stub")
+}
+func (s *stubFailingClient) ListTables(_ context.Context, _ string) ([]*app.TableInfo, error) {
+	return nil, errors.New("stub")
+}
+func (s *stubFailingClient) ListTablesWithStats(_ context.Context, _ string) ([]*app.TableInfo, error) {
+	return nil, errors.New("stub")
+}
+func (s *stubFailingClient) DescribeTable(_ context.Context, _, _ string) ([]*app.ColumnInfo, error) {
+	return nil, errors.New("stub")
+}
+func (s *stubFailingClient) GetTableStats(_ context.Context, _, _ string) (*app.TableInfo, error) {
+	return nil, errors.New("stub")
+}
+func (s *stubFailingClient) ListIndexes(_ context.Context, _, _ string) ([]*app.IndexInfo, error) {
+	return nil, errors.New("stub")
+}
+func (s *stubFailingClient) ExecuteQuery(_ context.Context, _ string, _ ...any) (*app.QueryResult, error) {
+	return nil, errors.New("stub")
+}
+func (s *stubFailingClient) ExplainQuery(_ context.Context, _ string, _ ...any) (*app.QueryResult, error) {
+	return nil, errors.New("stub")
+}
+
+// TestPublicError_StripsLibPqMetadata locks in that the helper extracts only
+// Message and the SQLSTATE Code.Name() from *pq.Error, dropping every other
+// field that could leak server internals (Detail / Hint / Where / Routine /
+// File / Line / Schema / Table / Column / Constraint / DataTypeName). Also
+// covers the wrapped-error path through errors.As (issue #88).
+func TestPublicError_StripsLibPqMetadata(t *testing.T) {
+	pqErr := &pq.Error{
+		Code:         "42P01", // undefined_table
+		Severity:     "ERROR",
+		Message:      `relation "users" does not exist`,
+		Detail:       "SECRET-DETAIL",
+		Hint:         "SECRET-HINT",
+		Where:        "SECRET-WHERE",
+		Routine:      "SECRET-ROUTINE",
+		File:         "SECRET-FILE",
+		Line:         "999",
+		Schema:       "SECRET-SCHEMA",
+		Table:        "SECRET-TABLE",
+		Column:       "SECRET-COLUMN",
+		Constraint:   "SECRET-CONSTRAINT",
+		DataTypeName: "SECRET-DATATYPE",
+	}
+	leaks := []string{
+		"SECRET-DETAIL", "SECRET-HINT", "SECRET-WHERE",
+		"SECRET-ROUTINE", "SECRET-FILE", "SECRET-SCHEMA",
+		"SECRET-TABLE", "SECRET-COLUMN", "SECRET-CONSTRAINT",
+		"SECRET-DATATYPE",
+	}
+
+	t.Run("direct pq.Error", func(t *testing.T) {
+		out := publicError("Failed to run query", pqErr)
+		assert.Contains(t, out, "Failed to run query")
+		assert.Contains(t, out, `relation "users" does not exist`, "Message must survive")
+		assert.Contains(t, out, "undefined_table", "SQLSTATE name must survive (42P01 -> undefined_table)")
+		for _, leak := range leaks {
+			assert.NotContains(t, out, leak, "leak %q must not appear", leak)
+		}
+	})
+
+	t.Run("wrapped pq.Error (errors.As must unwrap)", func(t *testing.T) {
+		wrapped := fmt.Errorf("outer wrap: %w", pqErr)
+		out := publicError("ctx", wrapped)
+		assert.Contains(t, out, `relation "users" does not exist`)
+		assert.Contains(t, out, "undefined_table")
+		for _, leak := range leaks {
+			assert.NotContains(t, out, leak)
+		}
+	})
+}
+
+// TestPublicError_PassesThroughSentinelErrors verifies that non-pq errors —
+// app-level sentinels and other plain errors — flow through unchanged with
+// just the prefix prepended. These messages are already curated and safe.
+func TestPublicError_PassesThroughSentinelErrors(t *testing.T) {
+	cases := []struct {
+		name string
+		in   error
+		want string
+	}{
+		{"ErrConnectionRequired", app.ErrConnectionRequired, app.ErrConnectionRequired.Error()},
+		{"ErrQueryRequired", app.ErrQueryRequired, app.ErrQueryRequired.Error()},
+		{"plain errors.New", errors.New("custom failure"), "custom failure"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := publicError("Failed to do thing", tc.in)
+			assert.Equal(t, "Failed to do thing: "+tc.want, got)
+		})
+	}
+}
+
+// TestHandleConnectDatabaseRequest_DoesNotLeakErrorDetails exercises the
+// connect_database handler with a stub client whose Connect returns a
+// fully-loaded *pq.Error simulating an authentication failure that exposes
+// host, port, username, and PostgreSQL source location. The handler must
+// return the fixed generic message regardless — none of the sensitive
+// fields may appear in the MCP response text (issue #88).
+func TestHandleConnectDatabaseRequest_DoesNotLeakErrorDetails(t *testing.T) {
+	leakyErr := &pq.Error{
+		Code:    "28P01", // invalid_password
+		Message: `password authentication failed for user "admin"`,
+		Detail:  "Connection from 10.0.0.5:5432 rejected",
+		Hint:    "Check pg_hba.conf",
+		Where:   "auth.c line 1234",
+		Routine: "auth_failed",
+		File:    "auth.c",
+		Line:    "1234",
+	}
+	silent := slog.New(slog.DiscardHandler)
+
+	appInstance := app.New(&stubFailingClient{connectErr: leakyErr})
+	appInstance.SetLogger(silent)
+
+	args := map[string]any{
+		"host":     "myhost",
+		"user":     "myuser",
+		"password": "mypw",
+		"database": "mydb",
+	}
+
+	result, err := handleConnectDatabaseRequest(context.Background(), args, appInstance, silent)
+	require.NoError(t, err, "handler must not propagate the error; it returns it inside the result")
+	require.NotNil(t, result)
+	require.True(t, result.IsError, "result must be flagged as an error")
+	require.NotEmpty(t, result.Content)
+
+	tc, ok := mcp.AsTextContent(result.Content[0])
+	require.True(t, ok, "expected TextContent, got %T", result.Content[0])
+
+	// Fixed generic message present.
+	assert.Contains(t, tc.Text, "Verify connection parameters")
+	assert.Contains(t, tc.Text, "Failed to connect to database")
+
+	// None of the leak markers — username, host, port, auth method, server-
+	// internal source location, server-config hint — may appear.
+	leaks := []string{
+		"admin",      // username (from Message)
+		"password",   // auth method (from Message)
+		"10.0.0.5",   // host (from Detail)
+		"5432",       // port (from Detail)
+		"pg_hba",     // server config (from Hint)
+		"auth.c",     // source file (from File / Where)
+		"auth_failed", // routine
+		"28P01",      // SQLSTATE — pre-auth state must not be exposed at all
+	}
+	for _, leak := range leaks {
+		assert.NotContains(t, tc.Text, leak, "connect_database response leaked %q", leak)
 	}
 }
 
