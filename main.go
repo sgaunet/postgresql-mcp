@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 
 	"github.com/lib/pq"
@@ -169,6 +170,21 @@ func getConnectionString(
 	return connectionString, nil
 }
 
+// safeConnectArgs returns a copy of the connect_database args with sensitive
+// fields stripped (password, user, connection_url) so the args map can be
+// safely emitted to debug logs. Only host, port, database, and sslmode are
+// retained — issue #85.
+func safeConnectArgs(args map[string]any) map[string]any {
+	keys := []string{"host", "port", "database", "sslmode"}
+	safe := make(map[string]any, len(keys))
+	for _, k := range keys {
+		if v, ok := args[k]; ok {
+			safe[k] = v
+		}
+	}
+	return safe
+}
+
 // handleConnectDatabaseRequest handles the connect_database tool request.
 func handleConnectDatabaseRequest(
 	ctx context.Context,
@@ -176,7 +192,7 @@ func handleConnectDatabaseRequest(
 	appInstance *app.App,
 	debugLogger *slog.Logger,
 ) (*mcp.CallToolResult, error) {
-	debugLogger.Debug("Received connect_database tool request", "args", args)
+	debugLogger.Debug("Received connect_database tool request", "args", safeConnectArgs(args))
 
 	connectionString, err := getConnectionString(args, debugLogger)
 	if err != nil {
@@ -488,12 +504,15 @@ func setupExecuteQueryTool(s *server.MCPServer, appInstance *app.App, debugLogge
 
 	s.AddTool(executeQueryTool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args := request.GetArguments()
-		debugLogger.Debug("Received execute_query tool request", "args", args)
+		// Do not dump the raw args map — it carries the full query text which
+		// may include PII or credentials (issue #85). The query is logged in
+		// truncated form below.
+		debugLogger.Debug("Received execute_query tool request")
 
 		// Extract query (required)
 		query, ok := args["query"].(string)
 		if !ok || query == "" {
-			debugLogger.Error("query is missing or not a string", "value", args["query"])
+			debugLogger.Error("query is missing or not a string")
 			return mcp.NewToolResultError("query must be a non-empty string"), nil
 		}
 
@@ -506,12 +525,12 @@ func setupExecuteQueryTool(s *server.MCPServer, appInstance *app.App, debugLogge
 			opts.Limit = int(limitFloat)
 		}
 
-		debugLogger.Debug("Processing execute_query request", "query", query, "limit", opts.Limit)
+		debugLogger.Debug("Processing execute_query request", "query", app.LogSafeQuery(query), "limit", opts.Limit)
 
 		// Execute query
 		result, err := appInstance.ExecuteQuery(ctx, opts)
 		if err != nil {
-			debugLogger.Error("Failed to execute query", "error", err, "query", query)
+			debugLogger.Error("Failed to execute query", "error", err, "query", app.LogSafeQuery(query))
 			return mcp.NewToolResultError(publicError("Failed to execute query", err)), nil
 		}
 
@@ -559,21 +578,24 @@ func setupExplainQueryTool(s *server.MCPServer, appInstance *app.App, debugLogge
 
 	s.AddTool(explainQueryTool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args := request.GetArguments()
-		debugLogger.Debug("Received explain_query tool request", "args", args)
+		// Do not dump the raw args map — it carries the full query text which
+		// may include PII or credentials (issue #85). The query is logged in
+		// truncated form below.
+		debugLogger.Debug("Received explain_query tool request")
 
 		// Extract query (required)
 		query, ok := args["query"].(string)
 		if !ok || query == "" {
-			debugLogger.Error("query is missing or not a string", "value", args["query"])
+			debugLogger.Error("query is missing or not a string")
 			return mcp.NewToolResultError("query must be a non-empty string"), nil
 		}
 
-		debugLogger.Debug("Processing explain_query request", "query", query)
+		debugLogger.Debug("Processing explain_query request", "query", app.LogSafeQuery(query))
 
 		// Explain query
 		result, err := appInstance.ExplainQuery(ctx, query)
 		if err != nil {
-			debugLogger.Error("Failed to explain query", "error", err, "query", query)
+			debugLogger.Error("Failed to explain query", "error", err, "query", app.LogSafeQuery(query))
 			return mcp.NewToolResultError(publicError("Failed to explain query", err)), nil
 		}
 
@@ -631,6 +653,7 @@ ENVIRONMENT VARIABLES (OPTIONAL):
     POSTGRES_MCP_CONN_MAX_LIFETIME  Connection max lifetime in seconds (default: 3600)
     POSTGRES_MCP_CONN_MAX_IDLE_TIME Connection max idle time in seconds (default: 600)
     POSTGRES_MCP_MAX_RESULT_ROWS    Maximum rows returned per query (default: 10000)
+    POSTGRES_MCP_LOG_LEVEL          Log level: debug, info, warn, error (default: info)
 
 DESCRIPTION:
     This MCP server provides the following tools for PostgreSQL integration:
@@ -686,6 +709,19 @@ func handleCommandLineFlags() {
 	}
 }
 
+// resolveLogLevel returns the desired log level from POSTGRES_MCP_LOG_LEVEL,
+// defaulting to "info" when the variable is unset. Comparison is
+// case-insensitive; unknown values fall back to the logger's own default.
+// Hardcoding "debug" here previously surfaced sensitive query text and
+// connection args in production logs (issue #85).
+func resolveLogLevel() string {
+	level := strings.ToLower(strings.TrimSpace(os.Getenv("POSTGRES_MCP_LOG_LEVEL")))
+	if level == "" {
+		return "info"
+	}
+	return level
+}
+
 // initializeApp creates and configures the application instance.
 func initializeApp() (*app.App, *slog.Logger) {
 	// Initialize the app with default client
@@ -694,8 +730,7 @@ func initializeApp() (*app.App, *slog.Logger) {
 		log.Fatalf("Failed to initialize app: %v", err)
 	}
 
-	// Set debug logger
-	debugLogger := logger.NewLogger("debug")
+	debugLogger := logger.NewLogger(resolveLogLevel())
 	appInstance.SetLogger(debugLogger)
 
 	debugLogger.Info("Starting PostgreSQL MCP Server", "version", version)

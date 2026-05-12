@@ -20,12 +20,23 @@ const (
 )
 
 // truncateQuery safely truncates a query string for logging purposes,
-// avoiding logging of potentially sensitive full query text.
+// avoiding logging of potentially sensitive full query text. maxLen is a
+// parameter so unit tests can exercise the cut-off behavior at small
+// lengths; production callers always use maxQueryLogLen via LogSafeQuery.
+//
+//nolint:unparam // see comment above re: test ergonomics
 func truncateQuery(query string, maxLen int) string {
 	if len(query) <= maxLen {
 		return query
 	}
 	return query[:maxLen] + "..."
+}
+
+// LogSafeQuery returns a log-safe (truncated) representation of a query so
+// callers outside this package can avoid emitting full query text — which
+// may carry PII or credentials — to debug/error logs (issue #85).
+func LogSafeQuery(query string) string {
+	return truncateQuery(query, maxQueryLogLen)
 }
 
 // applyLimit wraps a user query in a subquery with an outer LIMIT so that
@@ -310,7 +321,7 @@ func (a *App) ExecuteQuery(ctx context.Context, opts *ExecuteQueryOptions) (*Que
 		return nil, ErrQueryRequired
 	}
 
-	a.logger.Debug("Executing query", "query", opts.Query, "limit", opts.Limit)
+	a.logger.Debug("Executing query", "query", truncateQuery(opts.Query, maxQueryLogLen), "limit", opts.Limit)
 
 	query := opts.Query
 	if opts.Limit > 0 {
@@ -335,7 +346,7 @@ func (a *App) ExecuteQuery(ctx context.Context, opts *ExecuteQueryOptions) (*Que
 			a.logSecurityEvent("multi_statement_query", opts.Query, err)
 			return nil, fmt.Errorf("query rejected: %w", err)
 		}
-		a.logger.Error("Failed to execute query", "error", err, "query", opts.Query)
+		a.logger.Error("Failed to execute query", "error", err, "query", truncateQuery(opts.Query, maxQueryLogLen))
 		return nil, fmt.Errorf("failed to execute query: %w", err)
 	}
 
@@ -366,7 +377,7 @@ func (a *App) ExplainQuery(ctx context.Context, query string, args ...any) (*Que
 		return nil, ErrQueryRequired
 	}
 
-	a.logger.Debug("Explaining query", "query", query)
+	a.logger.Debug("Explaining query", "query", truncateQuery(query, maxQueryLogLen))
 
 	result, err := a.client.ExplainQuery(ctx, query, args...)
 	if err != nil {
@@ -386,7 +397,7 @@ func (a *App) ExplainQuery(ctx context.Context, query string, args ...any) (*Que
 			a.logSecurityEvent("multi_statement_query", query, err)
 			return nil, fmt.Errorf("query rejected: %w", err)
 		}
-		a.logger.Error("Failed to explain query", "error", err, "query", query)
+		a.logger.Error("Failed to explain query", "error", err, "query", truncateQuery(query, maxQueryLogLen))
 		return nil, fmt.Errorf("failed to explain query: %w", err)
 	}
 
