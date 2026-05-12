@@ -44,12 +44,40 @@ const (
 	// countFallbackTimeout caps each COUNT(*) fallback call so a single billion-row
 	// table cannot tie up a pool connection for minutes (issue #90).
 	countFallbackTimeout = 5 * time.Second
+
+	// defaultQueryTimeout bounds every tool handler's context and is also
+	// pushed into the connection options as statement_timeout so PostgreSQL
+	// cancels a runaway query even if the client context is unbounded
+	// (issue #89). Overridable via POSTGRES_MCP_QUERY_TIMEOUT.
+	defaultQueryTimeout = 30 * time.Second
 )
 
-// injectReadOnlyOption appends default_transaction_read_only=on to the connection string
-// so that every connection in the pool is read-only at the PostgreSQL level.
-// Handles both URL-style (postgres://...) and keyword-value style connection strings.
-func injectReadOnlyOption(connStr string) string {
+// QueryTimeout resolves the query timeout from POSTGRES_MCP_QUERY_TIMEOUT,
+// defaulting to defaultQueryTimeout when unset, blank, or unparseable.
+// The value accepts Go duration syntax ("45s", "2m", "500ms"); bare integers
+// are treated as seconds for ergonomic shell use. Non-positive values fall
+// back to the default so a misconfiguration cannot silently disable the
+// timeout (issue #89).
+func QueryTimeout() time.Duration {
+	raw := strings.TrimSpace(os.Getenv("POSTGRES_MCP_QUERY_TIMEOUT"))
+	if raw == "" {
+		return defaultQueryTimeout
+	}
+	if d, err := time.ParseDuration(raw); err == nil && d > 0 {
+		return d
+	}
+	if secs, err := strconv.Atoi(raw); err == nil && secs > 0 {
+		return time.Duration(secs) * time.Second
+	}
+	return defaultQueryTimeout
+}
+
+// injectOption appends a single "-c key=value"-style server option to the
+// PostgreSQL connection string's options= payload, handling both URL-style
+// (postgres://...) and keyword-value style DSNs. Multiple options can be
+// added by calling this function repeatedly; each call appends to whatever
+// options payload already exists.
+func injectOption(connStr, opt string) string {
 	connStr = strings.TrimSpace(connStr)
 	if connStr == "" {
 		return connStr
@@ -64,9 +92,9 @@ func injectReadOnlyOption(connStr string) string {
 		q := u.Query()
 		existing := q.Get("options")
 		if existing != "" {
-			q.Set("options", existing+" "+readOnlyOption)
+			q.Set("options", existing+" "+opt)
 		} else {
-			q.Set("options", readOnlyOption)
+			q.Set("options", opt)
 		}
 		u.RawQuery = q.Encode()
 		return u.String()
@@ -75,7 +103,7 @@ func injectReadOnlyOption(connStr string) string {
 	// Keyword-value style connection string.
 	optionsIdx := strings.Index(connStr, "options=")
 	if optionsIdx == -1 {
-		return connStr + " options='" + readOnlyOption + "'"
+		return connStr + " options='" + opt + "'"
 	}
 	valStart := optionsIdx + len("options=")
 
@@ -87,19 +115,36 @@ func injectReadOnlyOption(connStr string) string {
 			return connStr
 		}
 		closeIdx := valStart + 1 + closeRel
-		return connStr[:closeIdx] + " " + readOnlyOption + connStr[closeIdx:]
+		return connStr[:closeIdx] + " " + opt + connStr[closeIdx:]
 	}
 
 	// Unquoted form (issue #84): value runs to next whitespace or EOS.
 	// Rewrite as the quoted form so a multi-token options payload stays a
 	// single value; previously this branch silently returned the DSN
-	// unchanged, skipping the read-only enforcement.
+	// unchanged, skipping the option-injection guarantee.
 	valEnd := len(connStr)
 	if rel := strings.IndexAny(connStr[valStart:], " \t\n"); rel != -1 {
 		valEnd = valStart + rel
 	}
 	existing := connStr[valStart:valEnd]
-	return connStr[:optionsIdx] + "options='" + existing + " " + readOnlyOption + "'" + connStr[valEnd:]
+	return connStr[:optionsIdx] + "options='" + existing + " " + opt + "'" + connStr[valEnd:]
+}
+
+// injectReadOnlyOption appends default_transaction_read_only=on to the connection
+// string so every pool connection is read-only at the PostgreSQL session level.
+func injectReadOnlyOption(connStr string) string {
+	return injectOption(connStr, readOnlyOption)
+}
+
+// injectStatementTimeout appends a server-side statement_timeout (milliseconds)
+// to the connection options so a runaway query is killed by PostgreSQL itself
+// even when the caller's context is unbounded (issue #89). A non-positive
+// duration is a no-op.
+func injectStatementTimeout(connStr string, d time.Duration) string {
+	if d <= 0 {
+		return connStr
+	}
+	return injectOption(connStr, fmt.Sprintf("-c statement_timeout=%d", d.Milliseconds()))
 }
 
 // PostgreSQLClientImpl implements the PostgreSQLClient interface.
@@ -153,8 +198,8 @@ func maxResultRows() int {
 //   - POSTGRES_MCP_CONN_MAX_LIFETIME (seconds, default: 3600)
 //   - POSTGRES_MCP_CONN_MAX_IDLE_TIME (seconds, default: 600)
 func (c *PostgreSQLClientImpl) Connect(ctx context.Context, connectionString string) error {
-	readOnlyConnStr := injectReadOnlyOption(connectionString)
-	db, err := sql.Open("postgres", readOnlyConnStr)
+	hardenedConnStr := injectStatementTimeout(injectReadOnlyOption(connectionString), QueryTimeout())
+	db, err := sql.Open("postgres", hardenedConnStr)
 	if err != nil {
 		return fmt.Errorf("failed to open database connection: %w", err)
 	}
@@ -826,8 +871,13 @@ func (c *PostgreSQLClientImpl) ExecuteQuery(ctx context.Context, query string, a
 	}, nil
 }
 
-// ExplainQuery returns the execution plan for a query.
-func (c *PostgreSQLClientImpl) ExplainQuery(ctx context.Context, query string, args ...any) (*QueryResult, error) {
+// ExplainQuery returns the execution plan for a query. When analyze is false
+// the plan is non-executing — EXPLAIN (FORMAT JSON) — which is the safe
+// default for an LLM-driven tool surface that may submit heavy queries
+// (issue #89). When analyze is true the query is executed via
+// EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON); the caller's context bounds the
+// run, complementing the server-side statement_timeout.
+func (c *PostgreSQLClientImpl) ExplainQuery(ctx context.Context, query string, analyze bool, args ...any) (*QueryResult, error) {
 	if err := validateQuery(query); err != nil {
 		return nil, err
 	}
@@ -837,8 +887,11 @@ func (c *PostgreSQLClientImpl) ExplainQuery(ctx context.Context, query string, a
 		return nil, ErrNoDatabaseConnection
 	}
 
-	// Construct the EXPLAIN query
-	explainQuery := "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " + query //nolint:gosec // query is validated by validateQuery above (SELECT/WITH only)
+	prefix := "EXPLAIN (FORMAT JSON) "
+	if analyze {
+		prefix = "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) "
+	}
+	explainQuery := prefix + query //nolint:gosec // query is validated by validateQuery above (SELECT/WITH only)
 
 	rows, err := db.QueryContext(ctx, explainQuery, args...)
 	if err != nil {

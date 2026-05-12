@@ -118,7 +118,7 @@ func TestPostgreSQLClient_ErrorScenarios(t *testing.T) {
 	})
 
 	t.Run("ExplainQuery", func(t *testing.T) {
-		_, err := client.ExplainQuery(context.Background(), "SELECT 1")
+		_, err := client.ExplainQuery(context.Background(), "SELECT 1", false)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "no database connection")
 	})

@@ -101,8 +101,8 @@ func (m *MockPostgreSQLClient) ExecuteQuery(ctx context.Context, query string, q
 	return mockArgs.Get(0).(*QueryResult), mockArgs.Error(1)
 }
 
-func (m *MockPostgreSQLClient) ExplainQuery(ctx context.Context, query string, queryArgs ...any) (*QueryResult, error) {
-	mockArgs := m.Called(ctx, query, queryArgs)
+func (m *MockPostgreSQLClient) ExplainQuery(ctx context.Context, query string, analyze bool, queryArgs ...any) (*QueryResult, error) {
+	mockArgs := m.Called(ctx, query, analyze, queryArgs)
 	if mockArgs.Get(0) == nil {
 		return nil, mockArgs.Error(1)
 	}
@@ -517,9 +517,9 @@ func TestApp_ExplainQuery(t *testing.T) {
 	}
 
 	mockClient.On("Ping", mock.Anything).Return(nil)
-	mockClient.On("ExplainQuery", mock.Anything, "SELECT * FROM users", []interface{}(nil)).Return(expectedResult, nil)
+	mockClient.On("ExplainQuery", mock.Anything, "SELECT * FROM users", false, []interface{}(nil)).Return(expectedResult, nil)
 
-	result, err := app.ExplainQuery(context.Background(), "SELECT * FROM users")
+	result, err := app.ExplainQuery(context.Background(), "SELECT * FROM users", false)
 	assert.NoError(t, err)
 	assert.Equal(t, expectedResult, result)
 	mockClient.AssertExpectations(t)
@@ -528,7 +528,7 @@ func TestApp_ExplainQuery(t *testing.T) {
 func TestApp_ExplainQueryEmptyQuery(t *testing.T) {
 	app, _ := NewDefault()
 
-	result, err := app.ExplainQuery(context.Background(), "")
+	result, err := app.ExplainQuery(context.Background(), "", false)
 	assert.Error(t, err)
 	assert.Nil(t, result)
 	assert.Contains(t, err.Error(), "database connection failed")
@@ -695,9 +695,9 @@ func TestApp_ExplainQuery_SecurityAudit_InvalidQuery(t *testing.T) {
 	query := "DELETE FROM users"
 
 	mockClient.On("Ping", mock.Anything).Return(nil)
-	mockClient.On("ExplainQuery", mock.Anything, query, []interface{}(nil)).Return((*QueryResult)(nil), ErrInvalidQuery)
+	mockClient.On("ExplainQuery", mock.Anything, query, false, []interface{}(nil)).Return((*QueryResult)(nil), ErrInvalidQuery)
 
-	result, err := app.ExplainQuery(context.Background(), query)
+	result, err := app.ExplainQuery(context.Background(), query, false)
 	assert.Nil(t, result)
 	assert.ErrorIs(t, err, ErrInvalidQuery)
 	mockClient.AssertExpectations(t)

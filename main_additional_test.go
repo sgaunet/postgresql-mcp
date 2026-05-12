@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/lib/pq"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -462,7 +463,7 @@ func (s *stubFailingClient) ListIndexes(_ context.Context, _, _ string) ([]*app.
 func (s *stubFailingClient) ExecuteQuery(_ context.Context, _ string, _ ...any) (*app.QueryResult, error) {
 	return nil, errors.New("stub")
 }
-func (s *stubFailingClient) ExplainQuery(_ context.Context, _ string, _ ...any) (*app.QueryResult, error) {
+func (s *stubFailingClient) ExplainQuery(_ context.Context, _ string, _ bool, _ ...any) (*app.QueryResult, error) {
 	return nil, errors.New("stub")
 }
 
@@ -674,6 +675,27 @@ func TestSafeConnectArgs_RedactsSensitiveFields(t *testing.T) {
 		Debug("connect", "args", safe)
 	assert.NotContains(t, buf.String(), "s3cret", "log output leaked password")
 	assert.NotContains(t, buf.String(), "admin", "log output leaked username")
+}
+
+// TestWithQueryTimeout asserts that the per-handler timeout wrapper bounds
+// the returned context using the configured POSTGRES_MCP_QUERY_TIMEOUT
+// (issue #89). It must always return a non-nil cancel — otherwise the
+// caller's defer is silently a no-op.
+func TestWithQueryTimeout(t *testing.T) {
+	t.Setenv("POSTGRES_MCP_QUERY_TIMEOUT", "75ms")
+
+	qctx, cancel := withQueryTimeout(context.Background())
+	require.NotNil(t, cancel)
+	t.Cleanup(cancel)
+
+	deadline, ok := qctx.Deadline()
+	require.True(t, ok, "wrapped context must have a deadline")
+
+	remaining := time.Until(deadline)
+	assert.LessOrEqual(t, remaining, 75*time.Millisecond,
+		"deadline must be at most the configured timeout")
+	assert.Greater(t, remaining, time.Duration(0),
+		"deadline must be in the future, not already expired")
 }
 
 // TestResolveLogLevel covers the env-var-driven log level so production

@@ -170,6 +170,15 @@ func getConnectionString(
 	return connectionString, nil
 }
 
+// withQueryTimeout wraps the caller's context with the operator-configured
+// query timeout (POSTGRES_MCP_QUERY_TIMEOUT, default 30s) so any tool handler
+// — including a pathological SELECT through execute_query or an
+// EXPLAIN ANALYZE — cancels cleanly instead of holding a pool connection
+// indefinitely (issue #89). Callers must defer the returned cancel.
+func withQueryTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, app.QueryTimeout())
+}
+
 // safeConnectArgs returns a copy of the connect_database args with sensitive
 // fields stripped (password, user, connection_url) so the args map can be
 // safely emitted to debug logs. Only host, port, database, and sslmode are
@@ -199,8 +208,11 @@ func handleConnectDatabaseRequest(
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 
+	qctx, cancel := withQueryTimeout(ctx)
+	defer cancel()
+
 	// Attempt to connect
-	if err := appInstance.Connect(ctx, connectionString); err != nil {
+	if err := appInstance.Connect(qctx, connectionString); err != nil {
 		// Issue #88: pre-auth errors leak host/port (*net.OpError), username,
 		// and auth method (*pq.Error.Message). Return a fixed generic
 		// message regardless of error class; the full chain is logged above.
@@ -210,7 +222,7 @@ func handleConnectDatabaseRequest(
 	}
 
 	// Get current database name to confirm connection
-	dbName, err := appInstance.GetCurrentDatabase(ctx)
+	dbName, err := appInstance.GetCurrentDatabase(qctx)
 	if err != nil {
 		debugLogger.Warn("Connected but failed to get database name", "error", err)
 		dbName = "unknown"
@@ -266,6 +278,10 @@ func setupConnectDatabaseTool(s *server.MCPServer, appInstance *app.App, debugLo
 }
 
 // setupListDatabasesTool creates and registers the list_databases tool.
+//
+//nolint:dupl // structurally parallel to setupListSchemasTool by design; both
+// follow the same no-arg list → JSON → return shape, and merging them into a
+// generic registrar would obscure rather than clarify the tool wiring.
 func setupListDatabasesTool(s *server.MCPServer, appInstance *app.App, debugLogger *slog.Logger) {
 	listDBTool := mcp.NewTool("list_databases",
 		mcp.WithDescription("List all databases on the PostgreSQL server"),
@@ -273,9 +289,11 @@ func setupListDatabasesTool(s *server.MCPServer, appInstance *app.App, debugLogg
 
 	s.AddTool(listDBTool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		debugLogger.Debug("Received list_databases tool request")
+		qctx, cancel := withQueryTimeout(ctx)
+		defer cancel()
 
 		// List databases
-		databases, err := appInstance.ListDatabases(ctx)
+		databases, err := appInstance.ListDatabases(qctx)
 		if err != nil {
 			debugLogger.Error("Failed to list databases", "error", err)
 			return mcp.NewToolResultError(publicError("Failed to list databases", err)), nil
@@ -294,6 +312,8 @@ func setupListDatabasesTool(s *server.MCPServer, appInstance *app.App, debugLogg
 }
 
 // setupListSchemasTool creates and registers the list_schemas tool.
+//
+//nolint:dupl // structurally parallel to setupListDatabasesTool — see note there.
 func setupListSchemasTool(s *server.MCPServer, appInstance *app.App, debugLogger *slog.Logger) {
 	listSchemasTool := mcp.NewTool("list_schemas",
 		mcp.WithDescription("List all schemas in the current database"),
@@ -301,9 +321,11 @@ func setupListSchemasTool(s *server.MCPServer, appInstance *app.App, debugLogger
 
 	s.AddTool(listSchemasTool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		debugLogger.Debug("Received list_schemas tool request")
+		qctx, cancel := withQueryTimeout(ctx)
+		defer cancel()
 
 		// List schemas
-		schemas, err := appInstance.ListSchemas(ctx)
+		schemas, err := appInstance.ListSchemas(qctx)
 		if err != nil {
 			debugLogger.Error("Failed to list schemas", "error", err)
 			return mcp.NewToolResultError(publicError("Failed to list schemas", err)), nil
@@ -350,8 +372,11 @@ func setupListTablesTool(s *server.MCPServer, appInstance *app.App, debugLogger 
 
 		debugLogger.Debug("Processing list_tables request", schemaKey, opts.Schema, "include_size", opts.IncludeSize)
 
+		qctx, cancel := withQueryTimeout(ctx)
+		defer cancel()
+
 		// List tables
-		tables, err := appInstance.ListTables(ctx, opts)
+		tables, err := appInstance.ListTables(qctx, opts)
 		if err != nil {
 			debugLogger.Error("Failed to list tables", "error", err)
 			return mcp.NewToolResultError(publicError("Failed to list tables", err)), nil
@@ -452,7 +477,10 @@ func setupTableTool(s *server.MCPServer, appInstance *app.App, debugLogger *slog
 			return mcp.NewToolResultError(err.Error()), nil
 		}
 
-		result, err := config.Operation(ctx, appInstance, schema, table)
+		qctx, cancel := withQueryTimeout(ctx)
+		defer cancel()
+
+		result, err := config.Operation(qctx, appInstance, schema, table)
 		if err != nil {
 			debugLogger.Error("Failed to "+config.ErrorMsg, "error", err, schemaKey, schema, tableKey, table)
 			return mcp.NewToolResultError(publicError("Failed to "+config.ErrorMsg, err)), nil
@@ -527,8 +555,11 @@ func setupExecuteQueryTool(s *server.MCPServer, appInstance *app.App, debugLogge
 
 		debugLogger.Debug("Processing execute_query request", "query", app.LogSafeQuery(query), "limit", opts.Limit)
 
+		qctx, cancel := withQueryTimeout(ctx)
+		defer cancel()
+
 		// Execute query
-		result, err := appInstance.ExecuteQuery(ctx, opts)
+		result, err := appInstance.ExecuteQuery(qctx, opts)
 		if err != nil {
 			debugLogger.Error("Failed to execute query", "error", err, "query", app.LogSafeQuery(query))
 			return mcp.NewToolResultError(publicError("Failed to execute query", err)), nil
@@ -569,10 +600,14 @@ func setupListIndexesTool(s *server.MCPServer, appInstance *app.App, debugLogger
 // setupExplainQueryTool creates and registers the explain_query tool.
 func setupExplainQueryTool(s *server.MCPServer, appInstance *app.App, debugLogger *slog.Logger) {
 	explainQueryTool := mcp.NewTool("explain_query",
-		mcp.WithDescription("Get the execution plan for a SQL query"),
+		mcp.WithDescription("Get the execution plan for a SQL query. Defaults to a non-executing plan; "+
+			"pass analyze=true to run EXPLAIN ANALYZE (executes the query — same cost and timeout as execute_query)."),
 		mcp.WithString("query",
 			mcp.Required(),
 			mcp.Description("SQL query to explain (SELECT or WITH statements only)"),
+		),
+		mcp.WithBoolean("analyze",
+			mcp.Description("If true, run EXPLAIN (ANALYZE, BUFFERS) which executes the query. Default: false (plan only)."),
 		),
 	)
 
@@ -590,10 +625,15 @@ func setupExplainQueryTool(s *server.MCPServer, appInstance *app.App, debugLogge
 			return mcp.NewToolResultError("query must be a non-empty string"), nil
 		}
 
-		debugLogger.Debug("Processing explain_query request", "query", app.LogSafeQuery(query))
+		analyze, _ := args["analyze"].(bool)
+
+		debugLogger.Debug("Processing explain_query request", "query", app.LogSafeQuery(query), "analyze", analyze)
+
+		qctx, cancel := withQueryTimeout(ctx)
+		defer cancel()
 
 		// Explain query
-		result, err := appInstance.ExplainQuery(ctx, query)
+		result, err := appInstance.ExplainQuery(qctx, query, analyze)
 		if err != nil {
 			debugLogger.Error("Failed to explain query", "error", err, "query", app.LogSafeQuery(query))
 			return mcp.NewToolResultError(publicError("Failed to explain query", err)), nil
@@ -654,6 +694,9 @@ ENVIRONMENT VARIABLES (OPTIONAL):
     POSTGRES_MCP_CONN_MAX_IDLE_TIME Connection max idle time in seconds (default: 600)
     POSTGRES_MCP_MAX_RESULT_ROWS    Maximum rows returned per query (default: 10000)
     POSTGRES_MCP_LOG_LEVEL          Log level: debug, info, warn, error (default: info)
+    POSTGRES_MCP_QUERY_TIMEOUT      Per-tool-call timeout. Duration ("30s", "2m") or
+                                    bare integer seconds (default: 30s). Also pushed
+                                    into the connection's statement_timeout.
 
 DESCRIPTION:
     This MCP server provides the following tools for PostgreSQL integration:

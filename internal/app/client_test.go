@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNewPostgreSQLClient(t *testing.T) {
@@ -275,7 +276,7 @@ func TestPostgreSQLClient_ValidationRunsBeforeConnectionCheck_Issue99(t *testing
 	})
 
 	t.Run("ExplainQuery rejects DROP before connection check", func(t *testing.T) {
-		_, err := client.ExplainQuery(context.Background(), "DROP TABLE users")
+		_, err := client.ExplainQuery(context.Background(), "DROP TABLE users", false)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "only SELECT and WITH queries are allowed")
 	})
@@ -287,7 +288,7 @@ func TestPostgreSQLClient_ValidationRunsBeforeConnectionCheck_Issue99(t *testing
 	})
 
 	t.Run("ExplainQuery still reports missing connection for valid queries", func(t *testing.T) {
-		_, err := client.ExplainQuery(context.Background(), "SELECT 1")
+		_, err := client.ExplainQuery(context.Background(), "SELECT 1", false)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "no database connection")
 	})
@@ -295,7 +296,7 @@ func TestPostgreSQLClient_ValidationRunsBeforeConnectionCheck_Issue99(t *testing
 
 func TestPostgreSQLClient_ExplainQueryWithoutConnection(t *testing.T) {
 	client := NewPostgreSQLClient()
-	result, err := client.ExplainQuery(context.Background(), "SELECT 1")
+	result, err := client.ExplainQuery(context.Background(), "SELECT 1", false)
 	assert.Error(t, err)
 	assert.Nil(t, result)
 	assert.Contains(t, err.Error(), "no database connection")
@@ -321,7 +322,7 @@ func TestPostgreSQLClient_ExplainQueryValidation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// This will fail due to no real connection, but we're testing the query validation
-			result, err := client.ExplainQuery(context.Background(), tt.query)
+			result, err := client.ExplainQuery(context.Background(), tt.query, false)
 			assert.Error(t, err)
 			assert.Nil(t, result)
 			// Should fail with connection error since no real connection
@@ -710,6 +711,79 @@ func TestInjectReadOnlyOption_UnterminatedQuotedOptions_LeftAlone(t *testing.T) 
 	in := "host=localhost options='-c foo=bar"
 	out := injectReadOnlyOption(in)
 	assert.Equal(t, in, out)
+}
+
+// TestInjectStatementTimeout covers the issue #89 statement_timeout injection
+// across both DSN shapes plus the zero-duration no-op contract.
+func TestInjectStatementTimeout(t *testing.T) {
+	t.Run("URL-style appends statement_timeout in milliseconds", func(t *testing.T) {
+		out := injectStatementTimeout("postgres://u:p@h/db", 30*time.Second)
+		assert.Contains(t, out, "statement_timeout%3D30000",
+			"30s must serialize as 30000ms inside the URL options payload")
+	})
+
+	t.Run("keyword-value style appends statement_timeout", func(t *testing.T) {
+		out := injectStatementTimeout("host=localhost dbname=mydb", 1500*time.Millisecond)
+		assert.Contains(t, out, "-c statement_timeout=1500",
+			"sub-second durations must round to integer milliseconds")
+	})
+
+	t.Run("zero duration is a no-op", func(t *testing.T) {
+		in := "postgres://u:p@h/db"
+		assert.Equal(t, in, injectStatementTimeout(in, 0))
+	})
+
+	t.Run("negative duration is a no-op", func(t *testing.T) {
+		in := "host=localhost"
+		assert.Equal(t, in, injectStatementTimeout(in, -1*time.Second))
+	})
+
+	t.Run("composes with read-only injection in a single options payload", func(t *testing.T) {
+		// Issue #89: Connect chains both injections. Assert that the resulting
+		// DSN carries BOTH options inside a single options= value rather than
+		// producing a malformed second options= key (which lib/pq would
+		// silently drop the earlier one of).
+		in := "host=localhost dbname=mydb"
+		stacked := injectStatementTimeout(injectReadOnlyOption(in), 30*time.Second)
+		assert.Contains(t, stacked, "default_transaction_read_only=on")
+		assert.Contains(t, stacked, "statement_timeout=30000")
+		assert.Equal(t, 1, strings.Count(stacked, "options="),
+			"both options must share one options= payload, not produce two keys")
+	})
+}
+
+// TestQueryTimeout covers the issue #89 env-var-driven timeout resolution,
+// including the duration-string / bare-seconds dual format and the
+// fail-safe behavior on invalid or non-positive input.
+func TestQueryTimeout(t *testing.T) {
+	const key = "POSTGRES_MCP_QUERY_TIMEOUT"
+
+	tests := []struct {
+		name string
+		env  string
+		want time.Duration
+	}{
+		{"unset returns default", "", defaultQueryTimeout},
+		{"duration string", "45s", 45 * time.Second},
+		{"duration with units", "2m", 2 * time.Minute},
+		{"sub-second duration", "500ms", 500 * time.Millisecond},
+		{"bare integer treated as seconds", "10", 10 * time.Second},
+		{"zero falls back to default", "0", defaultQueryTimeout},
+		{"negative falls back to default", "-5s", defaultQueryTimeout},
+		{"garbage falls back to default", "soon", defaultQueryTimeout},
+		{"whitespace tolerated", "  20s  ", 20 * time.Second},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.env == "" {
+				require.NoError(t, os.Unsetenv(key))
+			} else {
+				t.Setenv(key, tt.env)
+			}
+			assert.Equal(t, tt.want, QueryTimeout())
+		})
+	}
 }
 
 func TestEnvIntOrDefault(t *testing.T) {
