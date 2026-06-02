@@ -4,7 +4,7 @@ go 1.25.5
 
 require (
 	github.com/lib/pq v1.12.3
-	github.com/mark3labs/mcp-go v0.50.0
+	github.com/mark3labs/mcp-go v0.54.1
 	github.com/stretchr/testify v1.11.1
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.42.0
 	golang.org/x/sync v0.19.0
