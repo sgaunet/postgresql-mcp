@@ -497,8 +497,7 @@ func TestPublicError_StripsLibPqMetadata(t *testing.T) {
 	}
 
 	t.Run("direct pq.Error", func(t *testing.T) {
-		out := publicError("Failed to run query", pqErr)
-		assert.Contains(t, out, "Failed to run query")
+		out := publicError(pqErr)
 		assert.Contains(t, out, `relation "users" does not exist`, "Message must survive")
 		assert.Contains(t, out, "undefined_table", "SQLSTATE name must survive (42P01 -> undefined_table)")
 		for _, leak := range leaks {
@@ -508,7 +507,8 @@ func TestPublicError_StripsLibPqMetadata(t *testing.T) {
 
 	t.Run("wrapped pq.Error (errors.As must unwrap)", func(t *testing.T) {
 		wrapped := fmt.Errorf("outer wrap: %w", pqErr)
-		out := publicError("ctx", wrapped)
+		out := publicError(wrapped)
+		assert.Contains(t, out, "outer wrap:", "App-layer wrap prefix must be preserved")
 		assert.Contains(t, out, `relation "users" does not exist`)
 		assert.Contains(t, out, "undefined_table")
 		for _, leak := range leaks {
@@ -518,8 +518,9 @@ func TestPublicError_StripsLibPqMetadata(t *testing.T) {
 }
 
 // TestPublicError_PassesThroughSentinelErrors verifies that non-pq errors —
-// app-level sentinels and other plain errors — flow through unchanged with
-// just the prefix prepended. These messages are already curated and safe.
+// app-level sentinels and other plain errors — flow through unchanged. The
+// single user-facing prefix is owned by the App layer's wrapping, so the helper
+// adds none of its own (issue #103). These messages are already curated and safe.
 func TestPublicError_PassesThroughSentinelErrors(t *testing.T) {
 	cases := []struct {
 		name string
@@ -532,8 +533,8 @@ func TestPublicError_PassesThroughSentinelErrors(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := publicError("Failed to do thing", tc.in)
-			assert.Equal(t, "Failed to do thing: "+tc.want, got)
+			got := publicError(tc.in)
+			assert.Equal(t, tc.want, got)
 		})
 	}
 }
