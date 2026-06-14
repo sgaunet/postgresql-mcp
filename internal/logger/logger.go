@@ -1,3 +1,4 @@
+// Package logger provides structured slog-based logging helpers for the MCP server.
 package logger
 
 import (

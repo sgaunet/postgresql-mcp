@@ -1,3 +1,4 @@
+// Package main implements the postgresql-mcp server: an MCP stdio server exposing read-only PostgreSQL tools.
 package main
 
 import (
@@ -279,7 +280,7 @@ func setupListDatabasesTool(s *server.MCPServer, appInstance *app.App, debugLogg
 		mcp.WithDescription("List all databases on the PostgreSQL server"),
 	)
 
-	s.AddTool(listDBTool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	s.AddTool(listDBTool, func(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		debugLogger.Debug("Received list_databases tool request")
 		qctx, cancel := withQueryTimeout(ctx)
 		defer cancel()
@@ -311,7 +312,7 @@ func setupListSchemasTool(s *server.MCPServer, appInstance *app.App, debugLogger
 		mcp.WithDescription("List all schemas in the current database"),
 	)
 
-	s.AddTool(listSchemasTool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	s.AddTool(listSchemasTool, func(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		debugLogger.Debug("Received list_schemas tool request")
 		qctx, cancel := withQueryTimeout(ctx)
 		defer cancel()
