@@ -413,7 +413,7 @@ func handleTableSchemaToolRequest(
 		schema = schemaArg
 	}
 
-	debugLogger.Debug(fmt.Sprintf("Processing %s request", toolName), schemaKey, schema, tableKey, table)
+	debugLogger.Debug("processing tool request", "tool", toolName, schemaKey, schema, tableKey, table)
 	return table, schema, nil
 }
 
@@ -483,7 +483,7 @@ func setupTableTool(s *server.MCPServer, appInstance *app.App, debugLogger *slog
 
 	s.AddTool(tool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args := request.GetArguments()
-		debugLogger.Debug(fmt.Sprintf("Received %s tool request", config.Name), "args", args)
+		debugLogger.Debug("received tool request", "tool", config.Name, "args", args)
 
 		table, schema, err := handleTableSchemaToolRequest(args, debugLogger, config.Name)
 		if err != nil {
