@@ -37,6 +37,12 @@ const (
 	// Configurable via POSTGRES_MCP_MAX_RESULT_ROWS environment variable.
 	defaultMaxResultRows = 10000
 
+	// rowCapHint caps the up-front capacity reserved for a result set so a large
+	// (env-configurable) maxResultRows cannot force a huge allocation for queries
+	// that return only a handful of rows, while still avoiding regrowth for
+	// typical result sizes.
+	rowCapHint = 256
+
 	// maxCountFallbackTables caps the COUNT(*) fallback in ListTablesWithStats
 	// so a schema with hundreds of fresh tables cannot fan out into unbounded
 	// sequential round-trips (issue #90).
@@ -666,53 +672,61 @@ func (c *PostgreSQLClientImpl) ListIndexes(ctx context.Context, schema, table st
 	return indexes, nil
 }
 
-// copySingleQuotedLiteral copies a single-quoted string literal from runes[start]
-// (which must be a single quote) into result, returning the new index after the closing quote.
-// Handles escaped quotes ('').
-func copySingleQuotedLiteral(runes []rune, start int, result *strings.Builder) int {
-	result.WriteRune(runes[start])
+// copySingleQuotedLiteral copies a single-quoted string literal from query[start]
+// (which must be a single quote) into result, returning the new index after the
+// closing quote. Handles escaped quotes (''). It walks bytes rather than runes:
+// every SQL token involved is ASCII, and UTF-8 continuation bytes (>= 0x80) never
+// collide with it, so multibyte content is copied through verbatim.
+func copySingleQuotedLiteral(query string, start int, result *strings.Builder) int {
+	result.WriteByte(query[start]) // opening quote
 	i := start + 1
-	for i < len(runes) {
-		result.WriteRune(runes[i])
-		if runes[i] == '\'' {
-			if i+1 < len(runes) && runes[i+1] == '\'' {
-				result.WriteRune(runes[i+1])
-				i += 2
-				continue
-			}
-			return i + 1
+	for i < len(query) {
+		idx := strings.IndexByte(query[i:], '\'')
+		if idx < 0 {
+			result.WriteString(query[i:]) // unterminated literal: copy remainder
+			return len(query)
 		}
-		i++
+		j := i + idx
+		result.WriteString(query[i : j+1]) // copy through the closing quote
+		i = j + 1
+		if i < len(query) && query[i] == '\'' {
+			result.WriteByte('\'') // escaped quote: consume the second and continue
+			i++
+			continue
+		}
+		return i
 	}
 	return i
 }
 
-// copyDoubleQuotedIdentifier copies a double-quoted identifier from runes[start]
-// (which must be a double quote) into result, returning the new index after the closing quote.
-func copyDoubleQuotedIdentifier(runes []rune, start int, result *strings.Builder) int {
-	result.WriteRune(runes[start])
+// copyDoubleQuotedIdentifier copies a double-quoted identifier from query[start]
+// (which must be a double quote) into result, returning the new index after the
+// closing quote. Matches the original behavior of stopping at the first closing
+// quote (PostgreSQL "" un-escaping is intentionally not handled here).
+func copyDoubleQuotedIdentifier(query string, start int, result *strings.Builder) int {
+	result.WriteByte(query[start]) // opening quote
 	i := start + 1
-	for i < len(runes) {
-		result.WriteRune(runes[i])
-		if runes[i] == '"' {
-			return i + 1
-		}
-		i++
+	idx := strings.IndexByte(query[i:], '"')
+	if idx < 0 {
+		result.WriteString(query[i:]) // unterminated identifier: copy remainder
+		return len(query)
 	}
-	return i
+	j := i + idx
+	result.WriteString(query[i : j+1]) // copy through the closing quote
+	return j + 1
 }
 
-// skipBlockComment skips a block comment starting at runes[start] (which must be '/')
+// skipBlockComment skips a block comment starting at query[start] (which must be '/')
 // with nesting support. Returns the new index after the closing */.
-func skipBlockComment(runes []rune, start int) int {
+func skipBlockComment(query string, start int) int {
 	depth := 1
 	i := start + commentTokenLen
-	for i < len(runes) && depth > 0 {
+	for i < len(query) && depth > 0 {
 		switch {
-		case i+1 < len(runes) && runes[i] == '/' && runes[i+1] == '*':
+		case i+1 < len(query) && query[i] == '/' && query[i+1] == '*':
 			depth++
 			i += commentTokenLen
-		case i+1 < len(runes) && runes[i] == '*' && runes[i+1] == '/':
+		case i+1 < len(query) && query[i] == '*' && query[i+1] == '/':
 			depth--
 			i += commentTokenLen
 		default:
@@ -722,39 +736,40 @@ func skipBlockComment(runes []rune, start int) int {
 	return i
 }
 
-// skipLineComment skips a line comment starting at runes[start] (which must be '-').
-// Returns the new index at the newline character (or end of runes).
-func skipLineComment(runes []rune, start int) int {
-	i := start + commentTokenLen
-	for i < len(runes) && runes[i] != '\n' {
-		i++
+// skipLineComment skips a line comment starting at query[start] (which must be '-').
+// Returns the new index at the newline character (or end of query).
+func skipLineComment(query string, start int) int {
+	idx := strings.IndexByte(query[start+commentTokenLen:], '\n')
+	if idx < 0 {
+		return len(query)
 	}
-	return i
+	return start + commentTokenLen + idx
 }
 
 // stripComments removes SQL comments from a query while preserving
 // content inside single-quoted string literals and double-quoted identifiers.
 // Block comments (/* */, including nested) and line comments (--) are replaced with spaces.
+// It walks bytes directly (no []rune conversion): all SQL tokens handled are ASCII,
+// and multibyte UTF-8 sequences are copied through verbatim.
 func stripComments(query string) string {
 	var result strings.Builder
 	result.Grow(len(query))
-	runes := []rune(query)
 	i := 0
 
-	for i < len(runes) {
+	for i < len(query) {
 		switch {
-		case runes[i] == '\'':
-			i = copySingleQuotedLiteral(runes, i, &result)
-		case runes[i] == '"':
-			i = copyDoubleQuotedIdentifier(runes, i, &result)
-		case i+1 < len(runes) && runes[i] == '/' && runes[i+1] == '*':
-			i = skipBlockComment(runes, i)
-			result.WriteRune(' ')
-		case i+1 < len(runes) && runes[i] == '-' && runes[i+1] == '-':
-			i = skipLineComment(runes, i)
-			result.WriteRune(' ')
+		case query[i] == '\'':
+			i = copySingleQuotedLiteral(query, i, &result)
+		case query[i] == '"':
+			i = copyDoubleQuotedIdentifier(query, i, &result)
+		case i+1 < len(query) && query[i] == '/' && query[i+1] == '*':
+			i = skipBlockComment(query, i)
+			result.WriteByte(' ')
+		case i+1 < len(query) && query[i] == '-' && query[i+1] == '-':
+			i = skipLineComment(query, i)
+			result.WriteByte(' ')
 		default:
-			result.WriteRune(runes[i])
+			result.WriteByte(query[i])
 			i++
 		}
 	}
@@ -763,47 +778,47 @@ func stripComments(query string) string {
 
 // containsSemicolonOutsideLiterals checks if the query contains a semicolon
 // that is not inside a single-quoted string literal or double-quoted identifier.
+// It walks bytes directly; all tokens handled are ASCII. An unterminated literal
+// swallows the remainder of the query, so any trailing semicolon is treated as
+// being inside the literal (returns false), matching the original behavior.
 func containsSemicolonOutsideLiterals(query string) bool {
-	runes := []rune(query)
 	i := 0
-
-	for i < len(runes) {
-		// Skip single-quoted string literals
-		if runes[i] == '\'' {
+	for i < len(query) {
+		switch query[i] {
+		case '\'':
 			i++
-			for i < len(runes) {
-				if runes[i] == '\'' {
-					if i+1 < len(runes) && runes[i+1] == '\'' {
-						i += 2
-						continue
-					}
-					i++
-					break
+			for i < len(query) {
+				idx := strings.IndexByte(query[i:], '\'')
+				if idx < 0 {
+					return false // unterminated literal
 				}
-				i++
+				i += idx + 1
+				if i < len(query) && query[i] == '\'' {
+					i++ // escaped quote: skip the second and keep scanning the literal
+					continue
+				}
+				break
 			}
-			continue
-		}
-
-		// Skip double-quoted identifiers
-		if runes[i] == '"' {
+		case '"':
 			i++
-			for i < len(runes) {
-				if runes[i] == '"' {
-					i++
-					break
-				}
-				i++
+			idx := strings.IndexByte(query[i:], '"')
+			if idx < 0 {
+				return false // unterminated identifier
 			}
-			continue
-		}
-
-		if runes[i] == ';' {
+			i += idx + 1
+		case ';':
 			return true
+		default:
+			i++
 		}
-		i++
 	}
 	return false
+}
+
+// hasPrefixFold reports whether s begins with prefix, ignoring ASCII case,
+// without allocating an upper/lower-cased copy of s.
+func hasPrefixFold(s, prefix string) bool {
+	return len(s) >= len(prefix) && strings.EqualFold(s[:len(prefix)], prefix)
 }
 
 // validateQuery checks if the query is allowed (SELECT or WITH only)
@@ -814,8 +829,8 @@ func validateQuery(query string) error {
 		return ErrQueryTooLong
 	}
 	stripped := stripComments(query)
-	trimmed := strings.TrimSpace(strings.ToUpper(stripped))
-	if !strings.HasPrefix(trimmed, "SELECT") && !strings.HasPrefix(trimmed, "WITH") {
+	trimmed := strings.TrimSpace(stripped)
+	if !hasPrefixFold(trimmed, "SELECT") && !hasPrefixFold(trimmed, "WITH") {
 		return ErrInvalidQuery
 	}
 	if containsSemicolonOutsideLiterals(stripped) {
@@ -832,14 +847,18 @@ func processRows(rows *sql.Rows, maxRows int) ([][]any, error) {
 		return nil, fmt.Errorf("failed to get columns: %w", err)
 	}
 
-	var result [][]any
+	// Preallocate the result (capped so a large configurable maxRows can't force a
+	// huge up-front allocation) and reuse a single valuePtrs slice across rows:
+	// rows.Scan copies into the pointed-to values during the call and does not
+	// retain the pointer slice, so it is safe to reuse.
+	result := make([][]any, 0, min(maxRows, rowCapHint))
+	valuePtrs := make([]any, len(columns))
 	for rows.Next() {
 		if len(result) >= maxRows {
 			return nil, fmt.Errorf("result set exceeded %d rows: %w", maxRows, ErrResultTooLarge)
 		}
 
-		values := make([]any, len(columns))
-		valuePtrs := make([]any, len(columns))
+		values := make([]any, len(columns)) // per-row: escapes into result, must stay fresh
 		for i := range values {
 			valuePtrs[i] = &values[i]
 		}
