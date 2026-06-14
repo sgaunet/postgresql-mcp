@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 )
 
@@ -96,8 +95,10 @@ type ConnectionManager interface {
 	Close() error
 	// Ping verifies the database connection is alive.
 	Ping(ctx context.Context) error
-	// GetDB returns the underlying *sql.DB for advanced usage or testing.
-	GetDB() *sql.DB
+	// HasConnection reports whether a usable connection pool currently exists,
+	// without issuing a network round-trip. It lets ensureConnection take its
+	// no-op fast path (issue #93) without leaking the driver type (issue #96).
+	HasConnection() bool
 }
 
 // DatabaseExplorer handles database and schema discovery.

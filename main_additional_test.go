@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"errors"
 	"flag"
 	"fmt"
@@ -435,7 +434,7 @@ type stubFailingClient struct {
 func (s *stubFailingClient) Connect(_ context.Context, _ string) error { return s.connectErr }
 func (s *stubFailingClient) Close() error                              { return nil }
 func (s *stubFailingClient) Ping(_ context.Context) error              { return errors.New("stub: not connected") }
-func (s *stubFailingClient) GetDB() *sql.DB                            { return nil }
+func (s *stubFailingClient) HasConnection() bool                       { return false }
 func (s *stubFailingClient) ListDatabases(_ context.Context) ([]*app.DatabaseInfo, error) {
 	return nil, errors.New("stub")
 }
