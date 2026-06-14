@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/sylvain/postgresql-mcp/internal/app"
 )
 
 func TestPrintHelp(t *testing.T) {
@@ -60,6 +61,6 @@ func TestVersion(t *testing.T) {
 }
 
 func TestErrorVariables(t *testing.T) {
-	assert.NotNil(t, ErrInvalidConnectionParameters)
-	assert.Contains(t, ErrInvalidConnectionParameters.Error(), "invalid connection parameters")
+	assert.NotNil(t, app.ErrInvalidConnectionParameters)
+	assert.Contains(t, app.ErrInvalidConnectionParameters.Error(), "invalid connection parameters")
 }

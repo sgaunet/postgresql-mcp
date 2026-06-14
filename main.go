@@ -32,15 +32,6 @@ const (
 	tableKey  = "table"
 )
 
-// Error variables for static errors.
-var (
-	ErrInvalidConnectionParameters = errors.New("invalid connection parameters")
-	ErrHostRequired                = errors.New("host is required")
-	ErrUserRequired                = errors.New("user is required")
-	ErrDatabaseRequired            = errors.New("database is required")
-	ErrInvalidSSLMode              = errors.New("invalid sslmode")
-)
-
 // validSSLModes is the libpq-recognised allowlist for the sslmode parameter.
 // Any other value would either silently downgrade TLS or, when crafted as
 // e.g. "prefer&extra=value", inject unintended URL parameters (issue #86).
@@ -74,13 +65,13 @@ type ConnectionParams struct {
 func buildConnectionString(params ConnectionParams) (string, error) {
 	// Validate required parameters
 	if params.Host == "" {
-		return "", ErrHostRequired
+		return "", app.ErrHostRequired
 	}
 	if params.User == "" {
-		return "", ErrUserRequired
+		return "", app.ErrUserRequired
 	}
 	if params.Database == "" {
-		return "", ErrDatabaseRequired
+		return "", app.ErrDatabaseRequired
 	}
 
 	// Set defaults
@@ -95,7 +86,7 @@ func buildConnectionString(params ConnectionParams) (string, error) {
 	}
 	if _, ok := validSSLModes[sslMode]; !ok {
 		return "", fmt.Errorf("%w: %q (allowed: disable, allow, prefer, require, verify-ca, verify-full)",
-			ErrInvalidSSLMode, sslMode)
+			app.ErrInvalidSSLMode, sslMode)
 	}
 
 	// Build via net/url so credentials and host are encoded correctly. Use
@@ -162,7 +153,7 @@ func getConnectionString(
 	connectionString, err := buildConnectionString(params)
 	if err != nil {
 		debugLogger.Error("Failed to build connection string", "error", err)
-		return "", fmt.Errorf("invalid connection parameters: %w", err)
+		return "", fmt.Errorf("%w: %w", app.ErrInvalidConnectionParameters, err)
 	}
 
 	debugLogger.Debug("Built connection string from parameters",
@@ -422,7 +413,7 @@ func marshalToJSON(data any, debugLogger *slog.Logger, errorMsg string) ([]byte,
 	jsonData, err := json.Marshal(data)
 	if err != nil {
 		debugLogger.Error("Failed to marshal data to JSON", "error", err, "context", errorMsg)
-		return nil, fmt.Errorf("%s: %w", errorMsg, app.ErrMarshalFailed)
+		return nil, fmt.Errorf("%s: %w", errorMsg, err)
 	}
 	return jsonData, nil
 }

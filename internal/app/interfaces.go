@@ -23,7 +23,16 @@ var (
 	)
 	ErrNoDatabaseConnection = errors.New("no database connection")
 	ErrTableNotFound        = errors.New("table does not exist")
-	ErrMarshalFailed        = errors.New("failed to marshal data to JSON")
+
+	// ErrInvalidConnectionParameters and the sibling Err*Required /
+	// ErrInvalidSSLMode sentinels validate connection-string construction
+	// (issue #102). They live in the domain layer rather than package main so
+	// internal consumers can errors.Is-match them.
+	ErrInvalidConnectionParameters = errors.New("invalid connection parameters")
+	ErrHostRequired                = errors.New("host is required")
+	ErrUserRequired                = errors.New("user is required")
+	ErrDatabaseRequired            = errors.New("database is required")
+	ErrInvalidSSLMode              = errors.New("invalid sslmode")
 )
 
 // DatabaseInfo represents basic database metadata.

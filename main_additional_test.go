@@ -93,8 +93,8 @@ func TestHandleCommandLineFlags_Implementation(t *testing.T) {
 
 // Test error handling constants
 func TestErrorConstants(t *testing.T) {
-	assert.NotNil(t, ErrInvalidConnectionParameters)
-	assert.Equal(t, "invalid connection parameters", ErrInvalidConnectionParameters.Error())
+	assert.NotNil(t, app.ErrInvalidConnectionParameters)
+	assert.Equal(t, "invalid connection parameters", app.ErrInvalidConnectionParameters.Error())
 }
 
 // Test version string
@@ -418,7 +418,7 @@ func TestBuildConnectionString_RejectsInvalidSSLMode(t *testing.T) {
 			}
 			_, err := buildConnectionString(params)
 			require.Error(t, err)
-			assert.ErrorIs(t, err, ErrInvalidSSLMode)
+			assert.ErrorIs(t, err, app.ErrInvalidSSLMode)
 		})
 	}
 }
