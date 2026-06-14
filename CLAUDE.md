@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-PostgreSQL MCP (Model Context Protocol) server that exposes 9 read-only PostgreSQL tools over stdio. Built with Go, uses `mcp-go` for the protocol and `lib/pq` as the PostgreSQL driver.
+PostgreSQL MCP (Model Context Protocol) server that exposes 9 read-only PostgreSQL tools over stdio. Built with Go, uses `mcp-go` for the protocol and `pgx/v5` (native `pgxpool`) as the PostgreSQL driver.
 
 ## Build & Development Commands
 

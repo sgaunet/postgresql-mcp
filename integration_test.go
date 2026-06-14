@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"sync"
@@ -14,7 +15,7 @@ import (
 	"github.com/sylvain/postgresql-mcp/internal/app"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 
-	_ "github.com/lib/pq"
+	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 // Integration tests use testcontainers to spin up PostgreSQL instances
@@ -50,7 +51,7 @@ func setupTestContainer(t *testing.T) (*postgres.PostgresContainer, string, func
 	require.NoError(t, err)
 
 	// Test that we can actually connect
-	db, err := sql.Open("postgres", connStr)
+	db, err := sql.Open("pgx", connStr)
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -80,7 +81,7 @@ func setupTestDatabase(t *testing.T) (*sql.DB, string, func()) {
 	_, connectionString, containerCleanup := setupTestContainer(t)
 
 	// Connect to PostgreSQL
-	db, err := sql.Open("postgres", connectionString)
+	db, err := sql.Open("pgx", connectionString)
 	require.NoError(t, err)
 
 	// Test connection
@@ -461,7 +462,7 @@ func TestIntegration_App_ListIndexes_SpecialCharacters(t *testing.T) {
 	_, connectionString, cleanup := setupTestContainer(t)
 	defer cleanup()
 
-	db, err := sql.Open("postgres", connectionString)
+	db, err := sql.Open("pgx", connectionString)
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -572,6 +573,56 @@ func TestIntegration_App_ExplainQuery(t *testing.T) {
 	// EXPLAIN should return execution plan
 	assert.NotEmpty(t, result.Columns)
 	assert.NotEmpty(t, result.Rows)
+}
+
+// TestIntegration_App_ExecuteQuery_ValueRepresentation_Issue94 locks in how the
+// pgx-native migration serializes assorted column types in the JSON tool
+// response. pgx.Rows.Values returns native Go types; normalizeRowValues then
+// keeps the output stable: numeric becomes a string (not a pgtype.Numeric
+// object), uuid becomes the canonical string (not a 16-element byte array),
+// json/jsonb become structured JSON, and arrays become JSON arrays. The payload
+// is marshaled exactly as the MCP handlers do (json.Marshal on the result).
+func TestIntegration_App_ExecuteQuery_ValueRepresentation_Issue94(t *testing.T) {
+	_, connectionString, cleanup := setupTestDatabase(t)
+	defer cleanup()
+
+	appInstance, err := app.NewDefault()
+	require.NoError(t, err)
+	defer appInstance.Disconnect()
+
+	ctx := context.Background()
+	require.NoError(t, appInstance.Connect(ctx, connectionString))
+
+	const q = `SELECT
+		1::int4                                       AS i4,
+		2::int8                                       AS i8,
+		3.14::numeric                                 AS num,
+		'hi'::text                                    AS txt,
+		true                                          AS flag,
+		'550e8400-e29b-41d4-a716-446655440000'::uuid  AS uid,
+		'{"k":1}'::jsonb                              AS jb,
+		ARRAY['a','b']::text[]                        AS arr,
+		NULL::text                                    AS nul`
+
+	result, err := appInstance.ExecuteQuery(ctx, &app.ExecuteQueryOptions{Query: q})
+	require.NoError(t, err)
+	require.Equal(t, 1, result.RowCount)
+
+	// Marshal exactly as the MCP handler does (main.go json.Marshal(result)).
+	payload, err := json.Marshal(result)
+	require.NoError(t, err)
+	s := string(payload)
+
+	assert.Contains(t, s, `"3.14"`, "numeric must serialize as a string")
+	assert.Contains(t, s, `"550e8400-e29b-41d4-a716-446655440000"`, "uuid must serialize as the canonical string")
+	assert.Contains(t, s, `{"k":1}`, "jsonb must serialize as structured JSON")
+	assert.Contains(t, s, `["a","b"]`, "text[] must serialize as a JSON array")
+	assert.Contains(t, s, `"hi"`, "text must serialize as a string")
+	assert.Contains(t, s, "null", "SQL NULL must serialize as JSON null")
+
+	// No opaque pgtype struct or raw byte-array must leak into the response.
+	assert.NotContains(t, s, `"Int":`, "numeric must not leak pgtype.Numeric struct fields")
+	assert.NotContains(t, s, `"Valid":`, "no pgtype struct fields should appear")
 }
 
 func TestIntegration_App_GetTableStats(t *testing.T) {
@@ -741,11 +792,11 @@ func TestIntegration_ReadOnlyEnforcement(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 
-	// Mutating statements via raw DB should be rejected by PostgreSQL read-only mode
-	db := client.GetDB()
-	require.NotNil(t, db)
+	// Mutating statements via the raw pool should be rejected by PostgreSQL read-only mode
+	pool := client.Pool()
+	require.NotNil(t, pool)
 
-	_, err = db.ExecContext(ctx, "CREATE TABLE read_only_test (id INT)")
+	_, err = pool.Exec(ctx, "CREATE TABLE read_only_test (id INT)")
 	assert.Error(t, err, "CREATE TABLE should be rejected in read-only mode")
 	assert.Contains(t, err.Error(), "read-only")
 
@@ -771,16 +822,16 @@ func TestIntegration_PoolConfiguration(t *testing.T) {
 	require.NoError(t, err)
 	defer client.Close()
 
-	db := client.GetDB()
-	require.NotNil(t, db)
+	pool := client.Pool()
+	require.NotNil(t, pool)
 
-	stats := db.Stats()
-	assert.Equal(t, 10, stats.MaxOpenConnections, "MaxOpenConns should be 10")
+	stats := pool.Stat()
+	assert.Equal(t, int32(10), stats.MaxConns(), "MaxConns should be 10")
 }
 
 // TestIntegration_ConcurrentQueriesAndReconnect_NoRace_Issue83 verifies that
 // concurrent query goroutines do not race against a goroutine calling Connect
-// (which swaps the underlying *sql.DB pool). Run with `go test -race` to
+// (which swaps the underlying *pgxpool.Pool). Run with `go test -race` to
 // detect the unsynchronized pointer access fixed in issue #83.
 func TestIntegration_ConcurrentQueriesAndReconnect_NoRace_Issue83(t *testing.T) {
 	_, connectionString, cleanup := setupTestContainer(t)
@@ -814,7 +865,7 @@ func TestIntegration_ConcurrentQueriesAndReconnect_NoRace_Issue83(t *testing.T) 
 		})
 	}
 
-	// Reconnector: periodically swap in a fresh *sql.DB pool, racing the readers.
+	// Reconnector: periodically swap in a fresh *pgxpool.Pool, racing the readers.
 	wg.Go(func() {
 		for {
 			select {

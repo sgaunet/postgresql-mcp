@@ -62,9 +62,9 @@ func TestPostgreSQLClient_StateManagement(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "no database connection")
 
-	// Test GetDB on fresh client
-	db := client.GetDB()
-	assert.Nil(t, db)
+	// Test Pool on fresh client
+	pool := client.Pool()
+	assert.Nil(t, pool)
 }
 
 // Test error scenarios that don't require real database
