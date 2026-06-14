@@ -1,8 +1,10 @@
-package app
+package app_test
 
 import (
 	"strings"
 	"testing"
+
+	"github.com/sylvain/postgresql-mcp/internal/app"
 )
 
 // Representative queries for the validation/parsing hot path. The "large"
@@ -33,7 +35,7 @@ func BenchmarkValidateQuery(b *testing.B) {
 	q := benchSmallQuery()
 	b.ReportAllocs()
 	for b.Loop() {
-		if err := validateQuery(q); err != nil {
+		if err := app.ValidateQuery(q); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -43,7 +45,7 @@ func BenchmarkValidateQueryLarge(b *testing.B) {
 	q := benchLargeQuery()
 	b.ReportAllocs()
 	for b.Loop() {
-		if err := validateQuery(q); err != nil {
+		if err := app.ValidateQuery(q); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -53,7 +55,7 @@ func BenchmarkStripComments(b *testing.B) {
 	q := benchLargeQuery()
 	b.ReportAllocs()
 	for b.Loop() {
-		_ = stripComments(q)
+		_ = app.StripComments(q)
 	}
 }
 
@@ -61,6 +63,6 @@ func BenchmarkContainsSemicolonOutsideLiterals(b *testing.B) {
 	q := benchLargeQuery()
 	b.ReportAllocs()
 	for b.Loop() {
-		_ = containsSemicolonOutsideLiterals(q)
+		_ = app.ContainsSemicolonOutsideLiterals(q)
 	}
 }

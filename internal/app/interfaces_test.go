@@ -1,14 +1,15 @@
-package app
+package app_test
 
 import (
 	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/sylvain/postgresql-mcp/internal/app"
 )
 
 func TestDatabaseInfoSerialization(t *testing.T) {
-	db := &DatabaseInfo{
+	db := &app.DatabaseInfo{
 		Name:     "testdb",
 		Owner:    "testuser",
 		Encoding: "UTF8",
@@ -24,7 +25,7 @@ func TestDatabaseInfoSerialization(t *testing.T) {
 	assert.Contains(t, string(jsonData), "10MB")
 
 	// Test JSON deserialization
-	var deserializedDB DatabaseInfo
+	var deserializedDB app.DatabaseInfo
 	err = json.Unmarshal(jsonData, &deserializedDB)
 	assert.NoError(t, err)
 	assert.Equal(t, db.Name, deserializedDB.Name)
@@ -35,7 +36,7 @@ func TestDatabaseInfoSerialization(t *testing.T) {
 
 func TestDatabaseInfoWithOmitEmpty(t *testing.T) {
 	// Test with empty size (should be omitted)
-	db := &DatabaseInfo{
+	db := &app.DatabaseInfo{
 		Name:     "testdb",
 		Owner:    "testuser",
 		Encoding: "UTF8",
@@ -48,7 +49,7 @@ func TestDatabaseInfoWithOmitEmpty(t *testing.T) {
 }
 
 func TestSchemaInfoSerialization(t *testing.T) {
-	schema := &SchemaInfo{
+	schema := &app.SchemaInfo{
 		Name:  "public",
 		Owner: "postgres",
 	}
@@ -58,7 +59,7 @@ func TestSchemaInfoSerialization(t *testing.T) {
 	assert.Contains(t, string(jsonData), "public")
 	assert.Contains(t, string(jsonData), "postgres")
 
-	var deserializedSchema SchemaInfo
+	var deserializedSchema app.SchemaInfo
 	err = json.Unmarshal(jsonData, &deserializedSchema)
 	assert.NoError(t, err)
 	assert.Equal(t, schema.Name, deserializedSchema.Name)
@@ -66,7 +67,7 @@ func TestSchemaInfoSerialization(t *testing.T) {
 }
 
 func TestTableInfoSerialization(t *testing.T) {
-	table := &TableInfo{
+	table := &app.TableInfo{
 		Schema:      "public",
 		Name:        "users",
 		Type:        "table",
@@ -86,7 +87,7 @@ func TestTableInfoSerialization(t *testing.T) {
 	assert.Contains(t, string(jsonData), "appuser")
 	assert.Contains(t, string(jsonData), "User accounts table")
 
-	var deserializedTable TableInfo
+	var deserializedTable app.TableInfo
 	err = json.Unmarshal(jsonData, &deserializedTable)
 	assert.NoError(t, err)
 	assert.Equal(t, table.Schema, deserializedTable.Schema)
@@ -100,7 +101,7 @@ func TestTableInfoSerialization(t *testing.T) {
 
 func TestTableInfoWithOmitEmpty(t *testing.T) {
 	// Test with minimal fields (omitempty should work)
-	table := &TableInfo{
+	table := &app.TableInfo{
 		Schema: "public",
 		Name:   "simple_table",
 		Type:   "table",
@@ -117,7 +118,7 @@ func TestTableInfoWithOmitEmpty(t *testing.T) {
 }
 
 func TestColumnInfoSerialization(t *testing.T) {
-	column := &ColumnInfo{
+	column := &app.ColumnInfo{
 		Name:         "email",
 		DataType:     "varchar(255)",
 		IsNullable:   false,
@@ -132,7 +133,7 @@ func TestColumnInfoSerialization(t *testing.T) {
 	assert.Contains(t, string(jsonData), "false")
 	assert.Contains(t, string(jsonData), "User email address")
 
-	var deserializedColumn ColumnInfo
+	var deserializedColumn app.ColumnInfo
 	err = json.Unmarshal(jsonData, &deserializedColumn)
 	assert.NoError(t, err)
 	assert.Equal(t, column.Name, deserializedColumn.Name)
@@ -143,7 +144,7 @@ func TestColumnInfoSerialization(t *testing.T) {
 }
 
 func TestColumnInfoNullable(t *testing.T) {
-	column := &ColumnInfo{
+	column := &app.ColumnInfo{
 		Name:       "optional_field",
 		DataType:   "text",
 		IsNullable: true,
@@ -155,7 +156,7 @@ func TestColumnInfoNullable(t *testing.T) {
 }
 
 func TestIndexInfoSerialization(t *testing.T) {
-	index := &IndexInfo{
+	index := &app.IndexInfo{
 		Name:      "idx_users_email",
 		Table:     "users",
 		Columns:   []string{"email"},
@@ -173,7 +174,7 @@ func TestIndexInfoSerialization(t *testing.T) {
 	assert.Contains(t, string(jsonData), "btree")
 	assert.Contains(t, string(jsonData), "2MB")
 
-	var deserializedIndex IndexInfo
+	var deserializedIndex app.IndexInfo
 	err = json.Unmarshal(jsonData, &deserializedIndex)
 	assert.NoError(t, err)
 	assert.Equal(t, index.Name, deserializedIndex.Name)
@@ -186,7 +187,7 @@ func TestIndexInfoSerialization(t *testing.T) {
 }
 
 func TestIndexInfoMultipleColumns(t *testing.T) {
-	index := &IndexInfo{
+	index := &app.IndexInfo{
 		Name:      "idx_users_name_email",
 		Table:     "users",
 		Columns:   []string{"last_name", "first_name", "email"},
@@ -198,7 +199,7 @@ func TestIndexInfoMultipleColumns(t *testing.T) {
 	jsonData, err := json.Marshal(index)
 	assert.NoError(t, err)
 
-	var deserializedIndex IndexInfo
+	var deserializedIndex app.IndexInfo
 	err = json.Unmarshal(jsonData, &deserializedIndex)
 	assert.NoError(t, err)
 	assert.Len(t, deserializedIndex.Columns, 3)
@@ -206,7 +207,7 @@ func TestIndexInfoMultipleColumns(t *testing.T) {
 }
 
 func TestPrimaryKeyIndex(t *testing.T) {
-	index := &IndexInfo{
+	index := &app.IndexInfo{
 		Name:      "users_pkey",
 		Table:     "users",
 		Columns:   []string{"id"},
@@ -219,7 +220,7 @@ func TestPrimaryKeyIndex(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Contains(t, string(jsonData), "true")
 
-	var deserializedIndex IndexInfo
+	var deserializedIndex app.IndexInfo
 	err = json.Unmarshal(jsonData, &deserializedIndex)
 	assert.NoError(t, err)
 	assert.True(t, deserializedIndex.IsUnique)
@@ -227,7 +228,7 @@ func TestPrimaryKeyIndex(t *testing.T) {
 }
 
 func TestQueryResultSerialization(t *testing.T) {
-	result := &QueryResult{
+	result := &app.QueryResult{
 		Columns: []string{"id", "name", "email"},
 		Rows: [][]interface{}{
 			{1, "John Doe", "john@example.com"},
@@ -244,7 +245,7 @@ func TestQueryResultSerialization(t *testing.T) {
 	assert.Contains(t, string(jsonData), "John Doe")
 	assert.Contains(t, string(jsonData), "jane@example.com")
 
-	var deserializedResult QueryResult
+	var deserializedResult app.QueryResult
 	err = json.Unmarshal(jsonData, &deserializedResult)
 	assert.NoError(t, err)
 	assert.Equal(t, result.Columns, deserializedResult.Columns)
@@ -253,7 +254,7 @@ func TestQueryResultSerialization(t *testing.T) {
 }
 
 func TestQueryResultEmpty(t *testing.T) {
-	result := &QueryResult{
+	result := &app.QueryResult{
 		Columns:  []string{"id", "name"},
 		Rows:     [][]interface{}{},
 		RowCount: 0,
@@ -262,7 +263,7 @@ func TestQueryResultEmpty(t *testing.T) {
 	jsonData, err := json.Marshal(result)
 	assert.NoError(t, err)
 
-	var deserializedResult QueryResult
+	var deserializedResult app.QueryResult
 	err = json.Unmarshal(jsonData, &deserializedResult)
 	assert.NoError(t, err)
 	assert.Equal(t, 0, deserializedResult.RowCount)
@@ -271,7 +272,7 @@ func TestQueryResultEmpty(t *testing.T) {
 }
 
 func TestQueryResultWithNullValues(t *testing.T) {
-	result := &QueryResult{
+	result := &app.QueryResult{
 		Columns: []string{"id", "optional_field"},
 		Rows: [][]interface{}{
 			{1, nil},
@@ -283,7 +284,7 @@ func TestQueryResultWithNullValues(t *testing.T) {
 	jsonData, err := json.Marshal(result)
 	assert.NoError(t, err)
 
-	var deserializedResult QueryResult
+	var deserializedResult app.QueryResult
 	err = json.Unmarshal(jsonData, &deserializedResult)
 	assert.NoError(t, err)
 	assert.Len(t, deserializedResult.Rows, 2)
@@ -292,7 +293,7 @@ func TestQueryResultWithNullValues(t *testing.T) {
 }
 
 func TestQueryResultWithMixedTypes(t *testing.T) {
-	result := &QueryResult{
+	result := &app.QueryResult{
 		Columns: []string{"id", "name", "age", "active", "score"},
 		Rows: [][]interface{}{
 			{1, "John", 30, true, 95.5},
@@ -304,7 +305,7 @@ func TestQueryResultWithMixedTypes(t *testing.T) {
 	jsonData, err := json.Marshal(result)
 	assert.NoError(t, err)
 
-	var deserializedResult QueryResult
+	var deserializedResult app.QueryResult
 	err = json.Unmarshal(jsonData, &deserializedResult)
 	assert.NoError(t, err)
 	assert.Equal(t, 2, deserializedResult.RowCount)

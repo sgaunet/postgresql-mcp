@@ -1,4 +1,4 @@
-package app
+package app_test
 
 import (
 	"bytes"
@@ -13,16 +13,17 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/sylvain/postgresql-mcp/internal/app"
 )
 
 func TestNewPostgreSQLClient(t *testing.T) {
-	client := NewPostgreSQLClient()
+	client := app.NewPostgreSQLClient()
 	assert.NotNil(t, client)
-	assert.IsType(t, &PostgreSQLClientImpl{}, client)
+	assert.IsType(t, &app.PostgreSQLClientImpl{}, client)
 }
 
 func TestPostgreSQLClient_Connect_InvalidConnectionString(t *testing.T) {
-	client := NewPostgreSQLClient()
+	client := app.NewPostgreSQLClient()
 
 	tests := []struct {
 		name             string
@@ -60,26 +61,26 @@ func TestPostgreSQLClient_Connect_InvalidConnectionString(t *testing.T) {
 }
 
 func TestPostgreSQLClient_CloseWithoutConnection(t *testing.T) {
-	client := NewPostgreSQLClient()
+	client := app.NewPostgreSQLClient()
 	err := client.Close()
 	assert.NoError(t, err)
 }
 
 func TestPostgreSQLClient_PingWithoutConnection(t *testing.T) {
-	client := NewPostgreSQLClient()
+	client := app.NewPostgreSQLClient()
 	err := client.Ping(context.Background())
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "no database connection")
 }
 
 func TestPostgreSQLClient_GetDBWithoutConnection(t *testing.T) {
-	client := NewPostgreSQLClient()
+	client := app.NewPostgreSQLClient()
 	db := client.GetDB()
 	assert.Nil(t, db)
 }
 
 func TestPostgreSQLClient_ListDatabasesWithoutConnection(t *testing.T) {
-	client := NewPostgreSQLClient()
+	client := app.NewPostgreSQLClient()
 	databases, err := client.ListDatabases(context.Background())
 	assert.Error(t, err)
 	assert.Nil(t, databases)
@@ -87,7 +88,7 @@ func TestPostgreSQLClient_ListDatabasesWithoutConnection(t *testing.T) {
 }
 
 func TestPostgreSQLClient_GetCurrentDatabaseWithoutConnection(t *testing.T) {
-	client := NewPostgreSQLClient()
+	client := app.NewPostgreSQLClient()
 	dbName, err := client.GetCurrentDatabase(context.Background())
 	assert.Error(t, err)
 	assert.Empty(t, dbName)
@@ -95,7 +96,7 @@ func TestPostgreSQLClient_GetCurrentDatabaseWithoutConnection(t *testing.T) {
 }
 
 func TestPostgreSQLClient_ListSchemasWithoutConnection(t *testing.T) {
-	client := NewPostgreSQLClient()
+	client := app.NewPostgreSQLClient()
 	schemas, err := client.ListSchemas(context.Background())
 	assert.Error(t, err)
 	assert.Nil(t, schemas)
@@ -103,7 +104,7 @@ func TestPostgreSQLClient_ListSchemasWithoutConnection(t *testing.T) {
 }
 
 func TestPostgreSQLClient_ListTablesWithoutConnection(t *testing.T) {
-	client := NewPostgreSQLClient()
+	client := app.NewPostgreSQLClient()
 	tables, err := client.ListTables(context.Background(), "public")
 	assert.Error(t, err)
 	assert.Nil(t, tables)
@@ -111,7 +112,7 @@ func TestPostgreSQLClient_ListTablesWithoutConnection(t *testing.T) {
 }
 
 func TestPostgreSQLClient_ListTablesWithEmptySchema(t *testing.T) {
-	client := NewPostgreSQLClient()
+	client := app.NewPostgreSQLClient()
 	tables, err := client.ListTables(context.Background(), "")
 	assert.Error(t, err)
 	assert.Nil(t, tables)
@@ -119,7 +120,7 @@ func TestPostgreSQLClient_ListTablesWithEmptySchema(t *testing.T) {
 }
 
 func TestPostgreSQLClient_DescribeTableWithoutConnection(t *testing.T) {
-	client := NewPostgreSQLClient()
+	client := app.NewPostgreSQLClient()
 	columns, err := client.DescribeTable(context.Background(), "public", "users")
 	assert.Error(t, err)
 	assert.Nil(t, columns)
@@ -127,7 +128,7 @@ func TestPostgreSQLClient_DescribeTableWithoutConnection(t *testing.T) {
 }
 
 func TestPostgreSQLClient_DescribeTableWithEmptySchema(t *testing.T) {
-	client := NewPostgreSQLClient()
+	client := app.NewPostgreSQLClient()
 	columns, err := client.DescribeTable(context.Background(), "", "users")
 	assert.Error(t, err)
 	assert.Nil(t, columns)
@@ -135,7 +136,7 @@ func TestPostgreSQLClient_DescribeTableWithEmptySchema(t *testing.T) {
 }
 
 func TestPostgreSQLClient_GetTableStatsWithoutConnection(t *testing.T) {
-	client := NewPostgreSQLClient()
+	client := app.NewPostgreSQLClient()
 	stats, err := client.GetTableStats(context.Background(), "public", "users")
 	assert.Error(t, err)
 	assert.Nil(t, stats)
@@ -143,7 +144,7 @@ func TestPostgreSQLClient_GetTableStatsWithoutConnection(t *testing.T) {
 }
 
 func TestPostgreSQLClient_GetTableStatsWithEmptySchema(t *testing.T) {
-	client := NewPostgreSQLClient()
+	client := app.NewPostgreSQLClient()
 	stats, err := client.GetTableStats(context.Background(), "", "users")
 	assert.Error(t, err)
 	assert.Nil(t, stats)
@@ -151,7 +152,7 @@ func TestPostgreSQLClient_GetTableStatsWithEmptySchema(t *testing.T) {
 }
 
 func TestPostgreSQLClient_ListIndexesWithoutConnection(t *testing.T) {
-	client := NewPostgreSQLClient()
+	client := app.NewPostgreSQLClient()
 	indexes, err := client.ListIndexes(context.Background(), "public", "users")
 	assert.Error(t, err)
 	assert.Nil(t, indexes)
@@ -159,7 +160,7 @@ func TestPostgreSQLClient_ListIndexesWithoutConnection(t *testing.T) {
 }
 
 func TestPostgreSQLClient_ListIndexesWithEmptySchema(t *testing.T) {
-	client := NewPostgreSQLClient()
+	client := app.NewPostgreSQLClient()
 	indexes, err := client.ListIndexes(context.Background(), "", "users")
 	assert.Error(t, err)
 	assert.Nil(t, indexes)
@@ -167,7 +168,7 @@ func TestPostgreSQLClient_ListIndexesWithEmptySchema(t *testing.T) {
 }
 
 func TestPostgreSQLClient_ExecuteQueryWithoutConnection(t *testing.T) {
-	client := NewPostgreSQLClient()
+	client := app.NewPostgreSQLClient()
 	result, err := client.ExecuteQuery(context.Background(), "SELECT 1")
 	assert.Error(t, err)
 	assert.Nil(t, result)
@@ -175,7 +176,7 @@ func TestPostgreSQLClient_ExecuteQueryWithoutConnection(t *testing.T) {
 }
 
 func TestPostgreSQLClient_ExecuteQueryInvalidQueries(t *testing.T) {
-	client := NewPostgreSQLClient()
+	client := app.NewPostgreSQLClient()
 
 	tests := []struct {
 		name        string
@@ -269,7 +270,7 @@ func TestPostgreSQLClient_ExecuteQueryInvalidQueries(t *testing.T) {
 // check, so callers saw misleading errors and security checks did not run
 // on disconnected clients).
 func TestPostgreSQLClient_ValidationRunsBeforeConnectionCheck_Issue99(t *testing.T) {
-	client := &PostgreSQLClientImpl{} // c.db is nil
+	client := &app.PostgreSQLClientImpl{} // c.db is nil
 
 	t.Run("ExecuteQuery rejects DELETE before connection check", func(t *testing.T) {
 		_, err := client.ExecuteQuery(context.Background(), "DELETE FROM users")
@@ -297,7 +298,7 @@ func TestPostgreSQLClient_ValidationRunsBeforeConnectionCheck_Issue99(t *testing
 }
 
 func TestPostgreSQLClient_ExplainQueryWithoutConnection(t *testing.T) {
-	client := NewPostgreSQLClient()
+	client := app.NewPostgreSQLClient()
 	result, err := client.ExplainQuery(context.Background(), "SELECT 1", false)
 	assert.Error(t, err)
 	assert.Nil(t, result)
@@ -305,7 +306,7 @@ func TestPostgreSQLClient_ExplainQueryWithoutConnection(t *testing.T) {
 }
 
 func TestPostgreSQLClient_ExplainQueryValidation(t *testing.T) {
-	client := NewPostgreSQLClient()
+	client := app.NewPostgreSQLClient()
 
 	tests := []struct {
 		name  string
@@ -336,7 +337,7 @@ func TestPostgreSQLClient_ExplainQueryValidation(t *testing.T) {
 // Test helper functions and edge cases
 
 func TestConnectionStringValidation(t *testing.T) {
-	client := &PostgreSQLClientImpl{}
+	client := &app.PostgreSQLClientImpl{}
 
 	// Test that Connect properly validates and handles errors
 	err := client.Connect(context.Background(), "postgres://invaliduser:invalidpass@nonexistenthost:5432/nonexistentdb")
@@ -372,7 +373,7 @@ func TestQueryResultProcessing(t *testing.T) {
 }
 
 func TestDefaultSchemaHandling(t *testing.T) {
-	client := NewPostgreSQLClient()
+	client := app.NewPostgreSQLClient()
 
 	// Test that empty schema defaults to "public"
 	tests := []struct {
@@ -429,7 +430,7 @@ func TestSQLQueryConstruction(t *testing.T) {
 		},
 	}
 
-	client := NewPostgreSQLClient()
+	client := app.NewPostgreSQLClient()
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -450,7 +451,7 @@ func TestSQLQueryConstruction(t *testing.T) {
 }
 
 func TestPostgreSQLClientImpl_ConnectAndClose(t *testing.T) {
-	client := &PostgreSQLClientImpl{}
+	client := &app.PostgreSQLClientImpl{}
 
 	// Test that Close works even without connection
 	err := client.Close()
@@ -465,7 +466,7 @@ func TestExecuteQueryEmptyResult(t *testing.T) {
 
 	// Mock an empty database result scenario
 	// This tests the logic for handling empty query results
-	result := &QueryResult{
+	result := &app.QueryResult{
 		Columns:  []string{},
 		Rows:     [][]interface{}{},
 		RowCount: 0,
@@ -495,33 +496,33 @@ func TestValidateQuery(t *testing.T) {
 		{name: "semicolon in double-quoted identifier", query: `SELECT "col;name" FROM users`, wantNoErr: true},
 
 		// Invalid queries (wrong statement type)
-		{name: "INSERT", query: "INSERT INTO users (name) VALUES ('test')", wantErr: ErrInvalidQuery},
-		{name: "UPDATE", query: "UPDATE users SET name = 'test'", wantErr: ErrInvalidQuery},
-		{name: "DELETE", query: "DELETE FROM users", wantErr: ErrInvalidQuery},
-		{name: "DROP TABLE", query: "DROP TABLE users", wantErr: ErrInvalidQuery},
-		{name: "CREATE TABLE", query: "CREATE TABLE test (id INT)", wantErr: ErrInvalidQuery},
-		{name: "ALTER TABLE", query: "ALTER TABLE users ADD COLUMN test INT", wantErr: ErrInvalidQuery},
-		{name: "TRUNCATE", query: "TRUNCATE users", wantErr: ErrInvalidQuery},
+		{name: "INSERT", query: "INSERT INTO users (name) VALUES ('test')", wantErr: app.ErrInvalidQuery},
+		{name: "UPDATE", query: "UPDATE users SET name = 'test'", wantErr: app.ErrInvalidQuery},
+		{name: "DELETE", query: "DELETE FROM users", wantErr: app.ErrInvalidQuery},
+		{name: "DROP TABLE", query: "DROP TABLE users", wantErr: app.ErrInvalidQuery},
+		{name: "CREATE TABLE", query: "CREATE TABLE test (id INT)", wantErr: app.ErrInvalidQuery},
+		{name: "ALTER TABLE", query: "ALTER TABLE users ADD COLUMN test INT", wantErr: app.ErrInvalidQuery},
+		{name: "TRUNCATE", query: "TRUNCATE users", wantErr: app.ErrInvalidQuery},
 
 		// Comment-based injection (should be caught after stripping comments)
-		{name: "block comment hiding INSERT", query: "/* hidden */ INSERT INTO users VALUES (1)", wantErr: ErrInvalidQuery},
-		{name: "line comment hiding INSERT", query: "-- comment\nINSERT INTO users VALUES (1)", wantErr: ErrInvalidQuery},
-		{name: "nested block comment hiding DROP", query: "/* outer /* inner */ still comment */ DROP TABLE users", wantErr: ErrInvalidQuery},
+		{name: "block comment hiding INSERT", query: "/* hidden */ INSERT INTO users VALUES (1)", wantErr: app.ErrInvalidQuery},
+		{name: "line comment hiding INSERT", query: "-- comment\nINSERT INTO users VALUES (1)", wantErr: app.ErrInvalidQuery},
+		{name: "nested block comment hiding DROP", query: "/* outer /* inner */ still comment */ DROP TABLE users", wantErr: app.ErrInvalidQuery},
 
 		// Multi-statement injection (should be caught by semicolon detection)
-		{name: "SELECT then DROP", query: "SELECT 1; DROP TABLE users", wantErr: ErrMultiStatementQuery},
-		{name: "two SELECTs", query: "SELECT 1; SELECT 2", wantErr: ErrMultiStatementQuery},
-		{name: "trailing semicolon", query: "SELECT 1;", wantErr: ErrMultiStatementQuery},
-		{name: "semicolon with spaces", query: "SELECT 1 ; DROP TABLE users", wantErr: ErrMultiStatementQuery},
+		{name: "SELECT then DROP", query: "SELECT 1; DROP TABLE users", wantErr: app.ErrMultiStatementQuery},
+		{name: "two SELECTs", query: "SELECT 1; SELECT 2", wantErr: app.ErrMultiStatementQuery},
+		{name: "trailing semicolon", query: "SELECT 1;", wantErr: app.ErrMultiStatementQuery},
+		{name: "semicolon with spaces", query: "SELECT 1 ; DROP TABLE users", wantErr: app.ErrMultiStatementQuery},
 
 		// Query too long
-		{name: "query exceeds max length", query: "SELECT " + strings.Repeat("x", MaxQueryLength), wantErr: ErrQueryTooLong},
-		{name: "query at max length", query: "SELECT " + strings.Repeat("x", MaxQueryLength-7), wantNoErr: true},
+		{name: "query exceeds max length", query: "SELECT " + strings.Repeat("x", app.MaxQueryLength), wantErr: app.ErrQueryTooLong},
+		{name: "query at max length", query: "SELECT " + strings.Repeat("x", app.MaxQueryLength-7), wantNoErr: true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateQuery(tt.query)
+			err := app.ValidateQuery(tt.query)
 			if tt.wantNoErr {
 				assert.NoError(t, err)
 			} else {
@@ -592,7 +593,7 @@ func TestStripComments(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := stripComments(tt.input)
+			result := app.StripComments(tt.input)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -616,7 +617,7 @@ func TestContainsSemicolonOutsideLiterals(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := containsSemicolonOutsideLiterals(tt.input)
+			result := app.ContainsSemicolonOutsideLiterals(tt.input)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -679,7 +680,7 @@ func TestInjectReadOnlyOption(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := injectReadOnlyOption(tt.input)
+			result := app.InjectReadOnlyOption(tt.input)
 			if tt.contains != "" {
 				assert.Contains(t, result, tt.contains)
 			} else {
@@ -697,7 +698,7 @@ func TestInjectReadOnlyOption(t *testing.T) {
 // table above and captures the regression at issue #84 in detail.
 func TestInjectReadOnlyOption_UnquotedOptions_ProducesValidQuotedForm(t *testing.T) {
 	in := "host=localhost options=-csome_option=on dbname=mydb"
-	out := injectReadOnlyOption(in)
+	out := app.InjectReadOnlyOption(in)
 
 	assert.Contains(t, out, "options='-csome_option=on -c default_transaction_read_only=on'",
 		"unquoted options must be merged into a single quoted value with read-only appended")
@@ -711,7 +712,7 @@ func TestInjectReadOnlyOption_UnquotedOptions_ProducesValidQuotedForm(t *testing
 // don't make it worse).
 func TestInjectReadOnlyOption_UnterminatedQuotedOptions_LeftAlone(t *testing.T) {
 	in := "host=localhost options='-c foo=bar"
-	out := injectReadOnlyOption(in)
+	out := app.InjectReadOnlyOption(in)
 	assert.Equal(t, in, out)
 }
 
@@ -719,25 +720,25 @@ func TestInjectReadOnlyOption_UnterminatedQuotedOptions_LeftAlone(t *testing.T) 
 // across both DSN shapes plus the zero-duration no-op contract.
 func TestInjectStatementTimeout(t *testing.T) {
 	t.Run("URL-style appends statement_timeout in milliseconds", func(t *testing.T) {
-		out := injectStatementTimeout("postgres://u:p@h/db", 30*time.Second)
+		out := app.InjectStatementTimeout("postgres://u:p@h/db", 30*time.Second)
 		assert.Contains(t, out, "statement_timeout%3D30000",
 			"30s must serialize as 30000ms inside the URL options payload")
 	})
 
 	t.Run("keyword-value style appends statement_timeout", func(t *testing.T) {
-		out := injectStatementTimeout("host=localhost dbname=mydb", 1500*time.Millisecond)
+		out := app.InjectStatementTimeout("host=localhost dbname=mydb", 1500*time.Millisecond)
 		assert.Contains(t, out, "-c statement_timeout=1500",
 			"sub-second durations must round to integer milliseconds")
 	})
 
 	t.Run("zero duration is a no-op", func(t *testing.T) {
 		in := "postgres://u:p@h/db"
-		assert.Equal(t, in, injectStatementTimeout(in, 0))
+		assert.Equal(t, in, app.InjectStatementTimeout(in, 0))
 	})
 
 	t.Run("negative duration is a no-op", func(t *testing.T) {
 		in := "host=localhost"
-		assert.Equal(t, in, injectStatementTimeout(in, -1*time.Second))
+		assert.Equal(t, in, app.InjectStatementTimeout(in, -1*time.Second))
 	})
 
 	t.Run("composes with read-only injection in a single options payload", func(t *testing.T) {
@@ -746,7 +747,7 @@ func TestInjectStatementTimeout(t *testing.T) {
 		// producing a malformed second options= key (which lib/pq would
 		// silently drop the earlier one of).
 		in := "host=localhost dbname=mydb"
-		stacked := injectStatementTimeout(injectReadOnlyOption(in), 30*time.Second)
+		stacked := app.InjectStatementTimeout(app.InjectReadOnlyOption(in), 30*time.Second)
 		assert.Contains(t, stacked, "default_transaction_read_only=on")
 		assert.Contains(t, stacked, "statement_timeout=30000")
 		assert.Equal(t, 1, strings.Count(stacked, "options="),
@@ -765,14 +766,14 @@ func TestQueryTimeout(t *testing.T) {
 		env  string
 		want time.Duration
 	}{
-		{"unset returns default", "", defaultQueryTimeout},
+		{"unset returns default", "", app.DefaultQueryTimeout},
 		{"duration string", "45s", 45 * time.Second},
 		{"duration with units", "2m", 2 * time.Minute},
 		{"sub-second duration", "500ms", 500 * time.Millisecond},
 		{"bare integer treated as seconds", "10", 10 * time.Second},
-		{"zero falls back to default", "0", defaultQueryTimeout},
-		{"negative falls back to default", "-5s", defaultQueryTimeout},
-		{"garbage falls back to default", "soon", defaultQueryTimeout},
+		{"zero falls back to default", "0", app.DefaultQueryTimeout},
+		{"negative falls back to default", "-5s", app.DefaultQueryTimeout},
+		{"garbage falls back to default", "soon", app.DefaultQueryTimeout},
 		{"whitespace tolerated", "  20s  ", 20 * time.Second},
 	}
 
@@ -783,7 +784,7 @@ func TestQueryTimeout(t *testing.T) {
 			} else {
 				t.Setenv(key, tt.env)
 			}
-			assert.Equal(t, tt.want, QueryTimeout())
+			assert.Equal(t, tt.want, app.QueryTimeout())
 		})
 	}
 }
@@ -811,7 +812,7 @@ func TestEnvIntOrDefault(t *testing.T) {
 			} else {
 				os.Unsetenv(key)
 			}
-			result := envIntOrDefault(key, tt.defVal)
+			result := app.EnvIntOrDefault(key, tt.defVal)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -824,7 +825,7 @@ func TestPoolConfig(t *testing.T) {
 	os.Unsetenv("POSTGRES_MCP_CONN_MAX_LIFETIME")
 	os.Unsetenv("POSTGRES_MCP_CONN_MAX_IDLE_TIME")
 
-	maxOpen, maxIdle, maxLifetime, maxIdleTime := poolConfig()
+	maxOpen, maxIdle, maxLifetime, maxIdleTime := app.PoolConfig()
 	assert.Equal(t, 10, maxOpen)
 	assert.Equal(t, 5, maxIdle)
 	assert.Equal(t, time.Hour, maxLifetime)
@@ -842,7 +843,7 @@ func TestPoolConfig(t *testing.T) {
 		os.Unsetenv("POSTGRES_MCP_CONN_MAX_IDLE_TIME")
 	}()
 
-	maxOpen, maxIdle, maxLifetime, maxIdleTime = poolConfig()
+	maxOpen, maxIdle, maxLifetime, maxIdleTime = app.PoolConfig()
 	assert.Equal(t, 20, maxOpen)
 	assert.Equal(t, 8, maxIdle)
 	assert.Equal(t, 30*time.Minute, maxLifetime)
@@ -864,7 +865,7 @@ func TestClampMaxIdle(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotIdle, gotCapped := clampMaxIdle(tt.maxOpen, tt.maxIdle)
+			gotIdle, gotCapped := app.ClampMaxIdle(tt.maxOpen, tt.maxIdle)
 			assert.Equal(t, tt.wantIdle, gotIdle)
 			assert.Equal(t, tt.wantCapped, gotCapped)
 		})
@@ -882,7 +883,7 @@ func TestPoolConfigClampsMaxIdle(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
 	defer slog.SetDefault(prev)
 
-	maxOpen, maxIdle, _, _ := poolConfig()
+	maxOpen, maxIdle, _, _ := app.PoolConfig()
 
 	assert.Equal(t, 10, maxOpen)
 	assert.Equal(t, 10, maxIdle, "maxIdle should be clamped to maxOpen")
@@ -897,10 +898,10 @@ func TestPoolConfigClampsMaxIdle(t *testing.T) {
 func TestMaxResultRows(t *testing.T) {
 	// Default value
 	os.Unsetenv("POSTGRES_MCP_MAX_RESULT_ROWS")
-	assert.Equal(t, 10000, maxResultRows())
+	assert.Equal(t, 10000, app.MaxResultRows())
 
 	// Custom value via env var
 	os.Setenv("POSTGRES_MCP_MAX_RESULT_ROWS", "500")
 	defer os.Unsetenv("POSTGRES_MCP_MAX_RESULT_ROWS")
-	assert.Equal(t, 500, maxResultRows())
+	assert.Equal(t, 500, app.MaxResultRows())
 }
