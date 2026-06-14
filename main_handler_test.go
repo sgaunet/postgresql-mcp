@@ -15,8 +15,9 @@ import (
 )
 
 // fakeClient is an in-memory app.PostgreSQLClient used to drive the MCP tool
-// handlers end-to-end. Ping always succeeds so App.ensureConnection takes its
-// fast path; the data methods return the configured canned values (or opErr
+// handlers end-to-end. GetDB returns a non-nil pool so App.ensureConnection
+// takes its fast path (no proactive ping — issue #93); the data methods return
+// the configured canned values (or opErr
 // when set, to exercise error paths) and record the schema/table/query/analyze
 // arguments they receive. That lets each test assert both the observable
 // CallToolResult and that the handler/App resolved its defaults (e.g. schema
@@ -42,10 +43,14 @@ type fakeClient struct {
 	gotAnalyze bool
 }
 
+// fakeDBHandle is a non-nil, never-connected *sql.DB so App.ensureConnection's
+// GetDB() gate takes its fast path without a real connection (issue #93).
+var fakeDBHandle, _ = sql.Open("postgres", "")
+
 func (f *fakeClient) Connect(_ context.Context, _ string) error { return nil }
 func (f *fakeClient) Close() error                              { return nil }
 func (f *fakeClient) Ping(_ context.Context) error              { return nil }
-func (f *fakeClient) GetDB() *sql.DB                            { return nil }
+func (f *fakeClient) GetDB() *sql.DB                            { return fakeDBHandle }
 
 func (f *fakeClient) ListDatabases(_ context.Context) ([]*app.DatabaseInfo, error) {
 	if f.opErr != nil {

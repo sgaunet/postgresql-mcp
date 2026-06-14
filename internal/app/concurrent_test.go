@@ -24,7 +24,10 @@ func TestApp_EnsureConnection_DedupesConcurrentReconnects_Issue83(t *testing.T) 
 	a := app.New(mockClient)
 	a.SetLogger(slog.New(slog.NewTextHandler(io.Discard, nil)))
 
-	// Ping always reports the connection as lost.
+	// No pool exists yet (GetDB returns nil), so each goroutine attempts bootstrap.
+	mockClient.On("GetDB").Return(nil)
+	// App.Connect (reached via bootstrap) pings to decide whether to close an
+	// existing pool; return an error so it skips Close.
 	mockClient.On("Ping", mock.Anything).Return(errors.New("connection lost"))
 
 	// Connect "succeeds" after a delay long enough for every follower
@@ -69,6 +72,9 @@ func TestApp_EnsureConnection_FollowerHonorsCtxCancel(t *testing.T) {
 	a := app.New(mockClient)
 	a.SetLogger(slog.New(slog.NewTextHandler(io.Discard, nil)))
 
+	mockClient.On("GetDB").Return(nil)
+	// App.Connect (reached via bootstrap) pings to decide whether to close an
+	// existing pool; return an error so it skips Close.
 	mockClient.On("Ping", mock.Anything).Return(errors.New("connection lost"))
 	// Leader's Connect blocks long enough that the follower's ctx times out first.
 	mockClient.On("Connect", mock.Anything, mock.Anything).
