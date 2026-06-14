@@ -1,4 +1,4 @@
-package app
+package app_test
 
 import (
 	"context"
@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/sylvain/postgresql-mcp/internal/app"
 )
 
 // TestApp_EnsureConnection_DedupesConcurrentReconnects_Issue83 verifies that
@@ -20,8 +21,8 @@ import (
 // then-reopen dance would create a thundering herd on the database.
 func TestApp_EnsureConnection_DedupesConcurrentReconnects_Issue83(t *testing.T) {
 	mockClient := &MockPostgreSQLClient{}
-	app := New(mockClient)
-	app.SetLogger(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	a := app.New(mockClient)
+	a.SetLogger(slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	// Ping always reports the connection as lost.
 	mockClient.On("Ping", mock.Anything).Return(errors.New("connection lost"))
@@ -44,7 +45,7 @@ func TestApp_EnsureConnection_DedupesConcurrentReconnects_Issue83(t *testing.T) 
 		go func() {
 			defer wg.Done()
 			<-start
-			_ = app.ensureConnection(context.Background())
+			_ = a.EnsureConnection(context.Background())
 		}()
 	}
 	close(start)
@@ -65,8 +66,8 @@ func TestApp_EnsureConnection_DedupesConcurrentReconnects_Issue83(t *testing.T) 
 // is cancelled, rather than blocking until the leader finishes.
 func TestApp_EnsureConnection_FollowerHonorsCtxCancel(t *testing.T) {
 	mockClient := &MockPostgreSQLClient{}
-	app := New(mockClient)
-	app.SetLogger(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	a := app.New(mockClient)
+	a.SetLogger(slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	mockClient.On("Ping", mock.Anything).Return(errors.New("connection lost"))
 	// Leader's Connect blocks long enough that the follower's ctx times out first.
@@ -78,7 +79,7 @@ func TestApp_EnsureConnection_FollowerHonorsCtxCancel(t *testing.T) {
 	leaderStarted := make(chan struct{})
 	go func() {
 		close(leaderStarted)
-		_ = app.ensureConnection(context.Background())
+		_ = a.EnsureConnection(context.Background())
 	}()
 	<-leaderStarted
 	// Give the leader a moment to enter its Connect call.
@@ -87,7 +88,7 @@ func TestApp_EnsureConnection_FollowerHonorsCtxCancel(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	start := time.Now()
-	err := app.ensureConnection(ctx)
+	err := a.EnsureConnection(ctx)
 	elapsed := time.Since(start)
 
 	assert.Error(t, err, "follower should observe its own ctx cancellation")

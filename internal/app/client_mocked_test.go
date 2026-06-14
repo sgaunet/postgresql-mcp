@@ -1,4 +1,4 @@
-package app
+package app_test
 
 import (
 	"context"
@@ -7,11 +7,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"github.com/sylvain/postgresql-mcp/internal/app"
 )
 
 // Test connection validation in various scenarios
 func TestPostgreSQLClient_ConnectValidation(t *testing.T) {
-	client := NewPostgreSQLClient()
+	client := app.NewPostgreSQLClient()
 
 	tests := []struct {
 		name          string
@@ -50,7 +51,7 @@ func TestPostgreSQLClient_ConnectValidation(t *testing.T) {
 
 // Test Close and Ping methods with different states
 func TestPostgreSQLClient_StateManagement(t *testing.T) {
-	client := NewPostgreSQLClient()
+	client := app.NewPostgreSQLClient()
 
 	// Test Close on fresh client
 	err := client.Close()
@@ -68,7 +69,7 @@ func TestPostgreSQLClient_StateManagement(t *testing.T) {
 
 // Test error scenarios that don't require real database
 func TestPostgreSQLClient_ErrorScenarios(t *testing.T) {
-	client := &PostgreSQLClientImpl{}
+	client := &app.PostgreSQLClientImpl{}
 
 	// Test all methods that check for db == nil
 	t.Run("ListDatabases", func(t *testing.T) {
@@ -141,7 +142,7 @@ func TestApp_SchemaDefaulting(t *testing.T) {
 		inputSchema    string
 		resolvedSchema string
 	}{
-		{"empty defaults to public", "", DefaultSchema},
+		{"empty defaults to public", "", app.DefaultSchema},
 		{"explicit schema preserved", "custom", "custom"},
 		{"public schema preserved", "public", "public"},
 	}
@@ -152,9 +153,9 @@ func TestApp_SchemaDefaulting(t *testing.T) {
 				mc := &MockPostgreSQLClient{}
 				mc.On("Ping", mock.Anything).Return(nil)
 				mc.On("DescribeTable", mock.Anything, tc.resolvedSchema, table).
-					Return([]*ColumnInfo{{Name: "id", DataType: "integer"}}, nil)
+					Return([]*app.ColumnInfo{{Name: "id", DataType: "integer"}}, nil)
 
-				_, err := New(mc).DescribeTable(context.Background(), tc.inputSchema, table)
+				_, err := app.New(mc).DescribeTable(context.Background(), tc.inputSchema, table)
 				require.NoError(t, err)
 				mc.AssertExpectations(t)
 			})
@@ -163,9 +164,9 @@ func TestApp_SchemaDefaulting(t *testing.T) {
 				mc := &MockPostgreSQLClient{}
 				mc.On("Ping", mock.Anything).Return(nil)
 				mc.On("GetTableStats", mock.Anything, tc.resolvedSchema, table).
-					Return(&TableInfo{Schema: tc.resolvedSchema, Name: table}, nil)
+					Return(&app.TableInfo{Schema: tc.resolvedSchema, Name: table}, nil)
 
-				_, err := New(mc).GetTableStats(context.Background(), tc.inputSchema, table)
+				_, err := app.New(mc).GetTableStats(context.Background(), tc.inputSchema, table)
 				require.NoError(t, err)
 				mc.AssertExpectations(t)
 			})
@@ -174,9 +175,9 @@ func TestApp_SchemaDefaulting(t *testing.T) {
 				mc := &MockPostgreSQLClient{}
 				mc.On("Ping", mock.Anything).Return(nil)
 				mc.On("ListIndexes", mock.Anything, tc.resolvedSchema, table).
-					Return([]*IndexInfo{{Name: "users_pkey", Table: table}}, nil)
+					Return([]*app.IndexInfo{{Name: "users_pkey", Table: table}}, nil)
 
-				_, err := New(mc).ListIndexes(context.Background(), tc.inputSchema, table)
+				_, err := app.New(mc).ListIndexes(context.Background(), tc.inputSchema, table)
 				require.NoError(t, err)
 				mc.AssertExpectations(t)
 			})
