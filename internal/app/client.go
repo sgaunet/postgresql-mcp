@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"os"
 	"strconv"
@@ -173,11 +174,36 @@ func envIntOrDefault(key string, defaultVal int) int {
 	return defaultVal
 }
 
+// clampMaxIdle bounds the idle connection count to the open connection count.
+// database/sql silently caps idle connections to the open limit, so a
+// misconfiguration like maxIdle=20, maxOpen=10 would leave intended capacity
+// unusable with no signal. Clamping here lets the caller surface the problem
+// (issue #104). The returned bool reports whether clamping occurred.
+func clampMaxIdle(maxOpen, maxIdle int) (int, bool) {
+	if maxIdle > maxOpen {
+		return maxOpen, true
+	}
+	return maxIdle, false
+}
+
 // poolConfig returns connection pool settings from environment variables,
-// falling back to sensible defaults for the MCP server use case.
+// falling back to sensible defaults for the MCP server use case. When the
+// configured idle limit exceeds the open limit it is clamped to the open limit
+// and a warning is logged, since database/sql would otherwise cap it silently
+// (issue #104).
 func poolConfig() (int, int, time.Duration, time.Duration) {
 	maxOpen := envIntOrDefault("POSTGRES_MCP_MAX_OPEN_CONNS", defaultMaxOpenConns)
 	maxIdle := envIntOrDefault("POSTGRES_MCP_MAX_IDLE_CONNS", defaultMaxIdleConns)
+	if clamped, capped := clampMaxIdle(maxOpen, maxIdle); capped {
+		slog.Warn(
+			"POSTGRES_MCP_MAX_IDLE_CONNS exceeds POSTGRES_MCP_MAX_OPEN_CONNS; "+
+				"clamping idle connections to the open limit",
+			"requested_max_idle", maxIdle,
+			"max_open", maxOpen,
+			"effective_max_idle", clamped,
+		)
+		maxIdle = clamped
+	}
 	lifetimeSec := envIntOrDefault("POSTGRES_MCP_CONN_MAX_LIFETIME", int(defaultConnMaxLifetime.Seconds()))
 	idleTimeSec := envIntOrDefault("POSTGRES_MCP_CONN_MAX_IDLE_TIME", int(defaultConnMaxIdleTime.Seconds()))
 	return maxOpen, maxIdle, time.Duration(lifetimeSec) * time.Second, time.Duration(idleTimeSec) * time.Second
@@ -194,7 +220,7 @@ func maxResultRows() int {
 // to provide defense-in-depth against SQL injection attacks.
 // Pool settings can be overridden via environment variables:
 //   - POSTGRES_MCP_MAX_OPEN_CONNS (default: 10)
-//   - POSTGRES_MCP_MAX_IDLE_CONNS (default: 5)
+//   - POSTGRES_MCP_MAX_IDLE_CONNS (default: 5, clamped to max open conns)
 //   - POSTGRES_MCP_CONN_MAX_LIFETIME (seconds, default: 3600)
 //   - POSTGRES_MCP_CONN_MAX_IDLE_TIME (seconds, default: 600)
 func (c *PostgreSQLClientImpl) Connect(ctx context.Context, connectionString string) error {

@@ -1,9 +1,11 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"testing"
@@ -845,6 +847,51 @@ func TestPoolConfig(t *testing.T) {
 	assert.Equal(t, 8, maxIdle)
 	assert.Equal(t, 30*time.Minute, maxLifetime)
 	assert.Equal(t, 5*time.Minute, maxIdleTime)
+}
+
+func TestClampMaxIdle(t *testing.T) {
+	tests := []struct {
+		name       string
+		maxOpen    int
+		maxIdle    int
+		wantIdle   int
+		wantCapped bool
+	}{
+		{"idle below open is unchanged", 10, 5, 5, false},
+		{"idle equal to open is unchanged", 10, 10, 10, false},
+		{"idle above open is clamped", 10, 20, 10, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotIdle, gotCapped := clampMaxIdle(tt.maxOpen, tt.maxIdle)
+			assert.Equal(t, tt.wantIdle, gotIdle)
+			assert.Equal(t, tt.wantCapped, gotCapped)
+		})
+	}
+}
+
+// TestPoolConfigClampsMaxIdle verifies that a misconfigured idle limit higher
+// than the open limit is clamped down and produces a visible warning (issue #104).
+func TestPoolConfigClampsMaxIdle(t *testing.T) {
+	t.Setenv("POSTGRES_MCP_MAX_OPEN_CONNS", "10")
+	t.Setenv("POSTGRES_MCP_MAX_IDLE_CONNS", "20")
+
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	defer slog.SetDefault(prev)
+
+	maxOpen, maxIdle, _, _ := poolConfig()
+
+	assert.Equal(t, 10, maxOpen)
+	assert.Equal(t, 10, maxIdle, "maxIdle should be clamped to maxOpen")
+
+	logOutput := buf.String()
+	assert.Contains(t, logOutput, "level=WARN")
+	assert.Contains(t, logOutput, "POSTGRES_MCP_MAX_IDLE_CONNS")
+	assert.Contains(t, logOutput, "requested_max_idle=20")
+	assert.Contains(t, logOutput, "effective_max_idle=10")
 }
 
 func TestMaxResultRows(t *testing.T) {
