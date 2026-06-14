@@ -330,21 +330,8 @@ func (a *App) ExecuteQuery(ctx context.Context, opts *ExecuteQueryOptions) (*Que
 
 	result, err := a.client.ExecuteQuery(ctx, query, opts.Args...)
 	if err != nil {
-		if errors.Is(err, ErrResultTooLarge) {
-			a.logSecurityEvent("result_too_large", opts.Query, err)
-			return nil, fmt.Errorf("query rejected: %w", err)
-		}
-		if errors.Is(err, ErrQueryTooLong) {
-			a.logSecurityEvent("query_too_long", opts.Query, err)
-			return nil, fmt.Errorf("query rejected: %w", err)
-		}
-		if errors.Is(err, ErrInvalidQuery) {
-			a.logSecurityEvent("invalid_query", opts.Query, err)
-			return nil, fmt.Errorf("query rejected: %w", err)
-		}
-		if errors.Is(err, ErrMultiStatementQuery) {
-			a.logSecurityEvent("multi_statement_query", opts.Query, err)
-			return nil, fmt.Errorf("query rejected: %w", err)
+		if rejErr, ok := a.rejectQuery(opts.Query, err); ok {
+			return nil, rejErr
 		}
 		a.logger.Error("Failed to execute query", "error", err, "query", truncateQuery(opts.Query, maxQueryLogLen))
 		return nil, fmt.Errorf("failed to execute query: %w", err)
@@ -385,21 +372,8 @@ func (a *App) ExplainQuery(ctx context.Context, query string, analyze bool, args
 
 	result, err := a.client.ExplainQuery(ctx, query, analyze, args...)
 	if err != nil {
-		if errors.Is(err, ErrResultTooLarge) {
-			a.logSecurityEvent("result_too_large", query, err)
-			return nil, fmt.Errorf("query rejected: %w", err)
-		}
-		if errors.Is(err, ErrQueryTooLong) {
-			a.logSecurityEvent("query_too_long", query, err)
-			return nil, fmt.Errorf("query rejected: %w", err)
-		}
-		if errors.Is(err, ErrInvalidQuery) {
-			a.logSecurityEvent("invalid_query", query, err)
-			return nil, fmt.Errorf("query rejected: %w", err)
-		}
-		if errors.Is(err, ErrMultiStatementQuery) {
-			a.logSecurityEvent("multi_statement_query", query, err)
-			return nil, fmt.Errorf("query rejected: %w", err)
+		if rejErr, ok := a.rejectQuery(query, err); ok {
+			return nil, rejErr
 		}
 		a.logger.Error("Failed to explain query", "error", err, "query", truncateQuery(query, maxQueryLogLen))
 		return nil, fmt.Errorf("failed to explain query: %w", err)
@@ -513,6 +487,27 @@ func (a *App) doReconnect() (any, error) {
 	}
 	a.logger.Info("Successfully reconnected to database")
 	return reconnectResult{}, nil
+}
+
+// rejectQuery maps a query-rejection sentinel error to a logged security event
+// and a "query rejected" wrapped error. ok is false when err is not a rejection
+// sentinel, signalling the caller to fall through to its generic error handling.
+func (a *App) rejectQuery(query string, err error) (error, bool) {
+	var event string
+	switch {
+	case errors.Is(err, ErrResultTooLarge):
+		event = "result_too_large"
+	case errors.Is(err, ErrQueryTooLong):
+		event = "query_too_long"
+	case errors.Is(err, ErrInvalidQuery):
+		event = "invalid_query"
+	case errors.Is(err, ErrMultiStatementQuery):
+		event = "multi_statement_query"
+	default:
+		return nil, false
+	}
+	a.logSecurityEvent(event, query, err)
+	return fmt.Errorf("query rejected: %w", err), true
 }
 
 // logSecurityEvent logs a security-relevant event (e.g., rejected query)
