@@ -296,7 +296,7 @@ func setupListDatabasesTool(s *server.MCPServer, appInstance *app.App, debugLogg
 		databases, err := appInstance.ListDatabases(qctx)
 		if err != nil {
 			debugLogger.Error("Failed to list databases", "error", err)
-			return mcp.NewToolResultError(publicError("Failed to list databases", err)), nil
+			return mcp.NewToolResultError(publicError(err)), nil
 		}
 
 		// Convert to JSON
@@ -328,7 +328,7 @@ func setupListSchemasTool(s *server.MCPServer, appInstance *app.App, debugLogger
 		schemas, err := appInstance.ListSchemas(qctx)
 		if err != nil {
 			debugLogger.Error("Failed to list schemas", "error", err)
-			return mcp.NewToolResultError(publicError("Failed to list schemas", err)), nil
+			return mcp.NewToolResultError(publicError(err)), nil
 		}
 
 		// Convert to JSON
@@ -379,7 +379,7 @@ func setupListTablesTool(s *server.MCPServer, appInstance *app.App, debugLogger 
 		tables, err := appInstance.ListTables(qctx, opts)
 		if err != nil {
 			debugLogger.Error("Failed to list tables", "error", err)
-			return mcp.NewToolResultError(publicError("Failed to list tables", err)), nil
+			return mcp.NewToolResultError(publicError(err)), nil
 		}
 
 		// Convert to JSON
@@ -437,12 +437,25 @@ func marshalToJSON(data any, debugLogger *slog.Logger, errorMsg string) ([]byte,
 // already-curated wrapped errors. The full error chain is preserved in the
 // internal log (the caller logs err immediately before calling publicError).
 // See issue #88.
-func publicError(prefix string, err error) string {
+//
+// The single user-facing prefix comes from the App layer's wrapping
+// (fmt.Errorf("failed to <op>: %w", err)); publicError adds none of its own, so
+// handlers no longer double-prefix the message. See issue #103.
+func publicError(err error) string {
 	var pqErr *pq.Error
 	if errors.As(err, &pqErr) {
-		return fmt.Sprintf("%s: %s (SQLSTATE %s)", prefix, pqErr.Message, pqErr.Code.Name())
+		sanitized := fmt.Sprintf("%s (SQLSTATE %s)", pqErr.Message, pqErr.Code.Name())
+		// Preserve any wrapping the App layer added (e.g. "failed to list
+		// databases: ") while replacing the raw "pq: <message>" text with the
+		// sanitized form. The pq sensitive fields (Detail, Hint, Where, ...) are
+		// never part of (*pq.Error).Error(), so they cannot leak here.
+		full := err.Error()
+		if raw := pqErr.Error(); strings.Contains(full, raw) {
+			return strings.Replace(full, raw, sanitized, 1)
+		}
+		return sanitized
 	}
-	return fmt.Sprintf("%s: %s", prefix, err.Error())
+	return err.Error()
 }
 
 // TableToolConfig holds configuration for table-based tools.
@@ -483,7 +496,7 @@ func setupTableTool(s *server.MCPServer, appInstance *app.App, debugLogger *slog
 		result, err := config.Operation(qctx, appInstance, schema, table)
 		if err != nil {
 			debugLogger.Error("Failed to "+config.ErrorMsg, "error", err, schemaKey, schema, tableKey, table)
-			return mcp.NewToolResultError(publicError("Failed to "+config.ErrorMsg, err)), nil
+			return mcp.NewToolResultError(publicError(err)), nil
 		}
 
 		jsonData, err := marshalToJSON(result, debugLogger, fmt.Sprintf("Failed to format %s response", config.Name))
@@ -562,7 +575,7 @@ func setupExecuteQueryTool(s *server.MCPServer, appInstance *app.App, debugLogge
 		result, err := appInstance.ExecuteQuery(qctx, opts)
 		if err != nil {
 			debugLogger.Error("Failed to execute query", "error", err, "query", app.LogSafeQuery(query))
-			return mcp.NewToolResultError(publicError("Failed to execute query", err)), nil
+			return mcp.NewToolResultError(publicError(err)), nil
 		}
 
 		// Convert to JSON
@@ -636,7 +649,7 @@ func setupExplainQueryTool(s *server.MCPServer, appInstance *app.App, debugLogge
 		result, err := appInstance.ExplainQuery(qctx, query, analyze)
 		if err != nil {
 			debugLogger.Error("Failed to explain query", "error", err, "query", app.LogSafeQuery(query))
-			return mcp.NewToolResultError(publicError("Failed to explain query", err)), nil
+			return mcp.NewToolResultError(publicError(err)), nil
 		}
 
 		// Convert to JSON
