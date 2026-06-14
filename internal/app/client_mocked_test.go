@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 // Test connection validation in various scenarios
@@ -124,35 +126,60 @@ func TestPostgreSQLClient_ErrorScenarios(t *testing.T) {
 	})
 }
 
-// Test schema defaulting logic
-func TestPostgreSQLClient_SchemaDefaults(t *testing.T) {
-	client := &PostgreSQLClientImpl{}
+// TestApp_SchemaDefaulting verifies the schema argument the App resolves before
+// delegating to the PostgreSQLClient: an empty schema becomes the default
+// ("public") while an explicit schema is preserved. Driving the table-scoped
+// operations through the mock client lets us assert the *resolved* schema
+// actually reaches the dependency for each case — the behavior the previous
+// version claimed to cover but never reached, because it stopped at the
+// "no database connection" guard before any defaulting ran.
+func TestApp_SchemaDefaulting(t *testing.T) {
+	const table = "users"
 
-	// These will fail due to no connection, but we can test that the functions handle schema defaults
-	tests := []struct {
-		name   string
-		schema string
-		table  string
+	cases := []struct {
+		name           string
+		inputSchema    string
+		resolvedSchema string
 	}{
-		{"empty schema", "", "users"},
-		{"explicit schema", "custom", "users"},
-		{"public schema", "public", "users"},
+		{"empty defaults to public", "", DefaultSchema},
+		{"explicit schema preserved", "custom", "custom"},
+		{"public schema preserved", "public", "public"},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// All these will fail with "no database connection" but exercise the schema defaulting logic
-			_, err := client.GetTableStats(context.Background(), tt.schema, tt.table)
-			assert.Error(t, err)
-			assert.Contains(t, err.Error(), "no database connection")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Run("DescribeTable", func(t *testing.T) {
+				mc := &MockPostgreSQLClient{}
+				mc.On("Ping", mock.Anything).Return(nil)
+				mc.On("DescribeTable", mock.Anything, tc.resolvedSchema, table).
+					Return([]*ColumnInfo{{Name: "id", DataType: "integer"}}, nil)
 
-			_, err = client.ListIndexes(context.Background(), tt.schema, tt.table)
-			assert.Error(t, err)
-			assert.Contains(t, err.Error(), "no database connection")
+				_, err := New(mc).DescribeTable(context.Background(), tc.inputSchema, table)
+				require.NoError(t, err)
+				mc.AssertExpectations(t)
+			})
 
-			_, err = client.DescribeTable(context.Background(), tt.schema, tt.table)
-			assert.Error(t, err)
-			assert.Contains(t, err.Error(), "no database connection")
+			t.Run("GetTableStats", func(t *testing.T) {
+				mc := &MockPostgreSQLClient{}
+				mc.On("Ping", mock.Anything).Return(nil)
+				mc.On("GetTableStats", mock.Anything, tc.resolvedSchema, table).
+					Return(&TableInfo{Schema: tc.resolvedSchema, Name: table}, nil)
+
+				_, err := New(mc).GetTableStats(context.Background(), tc.inputSchema, table)
+				require.NoError(t, err)
+				mc.AssertExpectations(t)
+			})
+
+			t.Run("ListIndexes", func(t *testing.T) {
+				mc := &MockPostgreSQLClient{}
+				mc.On("Ping", mock.Anything).Return(nil)
+				mc.On("ListIndexes", mock.Anything, tc.resolvedSchema, table).
+					Return([]*IndexInfo{{Name: "users_pkey", Table: table}}, nil)
+
+				_, err := New(mc).ListIndexes(context.Background(), tc.inputSchema, table)
+				require.NoError(t, err)
+				mc.AssertExpectations(t)
+			})
 		})
 	}
 }
