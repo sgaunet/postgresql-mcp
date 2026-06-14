@@ -160,8 +160,7 @@ func injectStatementTimeout(connStr string, d time.Duration) string {
 // load the current *sql.DB without locking, while Connect can atomically
 // swap in a freshly opened pool during reconnection (issue #83).
 type PostgreSQLClientImpl struct {
-	db               atomic.Pointer[sql.DB]
-	connectionString string
+	db atomic.Pointer[sql.DB]
 }
 
 // NewPostgreSQLClient creates a new PostgreSQL client.
@@ -253,7 +252,6 @@ func (c *PostgreSQLClientImpl) Connect(ctx context.Context, connectionString str
 	if old := c.db.Swap(db); old != nil {
 		_ = old.Close()
 	}
-	c.connectionString = connectionString
 	return nil
 }
 
