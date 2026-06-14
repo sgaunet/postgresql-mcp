@@ -151,7 +151,7 @@ func TestApp_SchemaDefaulting(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Run("DescribeTable", func(t *testing.T) {
 				mc := &MockPostgreSQLClient{}
-				mc.On("Ping", mock.Anything).Return(nil)
+				mc.On("GetDB").Return(stubDB())
 				mc.On("DescribeTable", mock.Anything, tc.resolvedSchema, table).
 					Return([]*app.ColumnInfo{{Name: "id", DataType: "integer"}}, nil)
 
@@ -162,7 +162,7 @@ func TestApp_SchemaDefaulting(t *testing.T) {
 
 			t.Run("GetTableStats", func(t *testing.T) {
 				mc := &MockPostgreSQLClient{}
-				mc.On("Ping", mock.Anything).Return(nil)
+				mc.On("GetDB").Return(stubDB())
 				mc.On("GetTableStats", mock.Anything, tc.resolvedSchema, table).
 					Return(&app.TableInfo{Schema: tc.resolvedSchema, Name: table}, nil)
 
@@ -173,7 +173,7 @@ func TestApp_SchemaDefaulting(t *testing.T) {
 
 			t.Run("ListIndexes", func(t *testing.T) {
 				mc := &MockPostgreSQLClient{}
-				mc.On("Ping", mock.Anything).Return(nil)
+				mc.On("GetDB").Return(stubDB())
 				mc.On("ListIndexes", mock.Anything, tc.resolvedSchema, table).
 					Return([]*app.IndexInfo{{Name: "users_pkey", Table: table}}, nil)
 

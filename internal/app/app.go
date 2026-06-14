@@ -383,9 +383,18 @@ func (a *App) ExplainQuery(ctx context.Context, query string, analyze bool, args
 	return result, nil
 }
 
-// ValidateConnection checks if the database connection is valid (for backward compatibility).
+// ValidateConnection checks that the database connection is valid. Unlike the
+// per-request ensureConnection (which no longer pings — issue #93), this is an
+// explicit, non-hot-path liveness probe: it ensures a pool exists (bootstrapping
+// one if necessary) and then actively pings it.
 func (a *App) ValidateConnection(ctx context.Context) error {
-	return a.ensureConnection(ctx)
+	if err := a.ensureConnection(ctx); err != nil {
+		return err
+	}
+	if err := a.client.Ping(ctx); err != nil {
+		return fmt.Errorf("connection validation failed: %w", err)
+	}
+	return nil
 }
 
 // tryConnect picks the connection string for an (initial or recovery) Connect.
@@ -418,36 +427,38 @@ func (a *App) tryConnect(ctx context.Context) error {
 	return a.Connect(ctx, connectionString)
 }
 
-// ensureConnection checks if the database connection is alive and attempts
-// automatic reconnection if the connection has been lost.
+// ensureConnection makes sure a usable connection pool exists before a database
+// operation, without adding a network round-trip to the request.
 //
-// This method is called before every database operation to provide transparent
-// connection recovery. If the connection ping fails, it attempts to reconnect
-// using the original connection parameters from POSTGRES_URL or DATABASE_URL
-// environment variables.
+// It does NOT proactively ping (issue #93): once a *sql.DB pool exists,
+// database/sql validates pooled connections itself and transparently opens a
+// fresh connection when a cached one has gone bad (driver.ErrBadConn), so a
+// per-request ping merely doubled latency and pool pressure. The pool's presence
+// is detected with a cheap, lock-free GetDB() load (no RTT).
 //
-// Reconnection behavior:
-//   - Concurrent reconnect attempts are deduped via singleflight, so N handlers
-//     observing the same failure trigger only one underlying Connect (issue #83).
-//   - Uses a background context so reconnection is not cancelled by request timeout.
+// The only case that needs work here is when no pool exists yet — initial
+// lazy bootstrap, or recovery after Disconnect. Establishing it is deduped via
+// singleflight so that N handlers racing on a cold start trigger only one
+// underlying Connect (issue #83); the connection string is chosen by tryConnect
+// (sticky session from the last Connect, else POSTGRES_URL/DATABASE_URL — #87).
+//
+// Behavior:
+//   - Uses a background context for the connect so it is not cancelled by an
+//     individual request timeout.
 //   - Followers honor their own request ctx and may abort while the leader runs.
-//   - Logs reconnection attempts at Debug level and results at Info/Error level.
-//   - Returns ErrConnectionRequired if the client is nil or reconnection fails.
-//
-// Operations may experience a slight delay during reconnection. For environments
-// where connection stability is critical, configure shorter pool lifetimes via
-// POSTGRES_MCP_CONN_MAX_LIFETIME and POSTGRES_MCP_CONN_MAX_IDLE_TIME.
+//   - Returns ErrConnectionRequired if the client is nil or bootstrap fails.
 func (a *App) ensureConnection(ctx context.Context) error {
 	if a.client == nil {
 		return ErrConnectionRequired
 	}
 
-	// Fast path: current connection is healthy.
-	if err := a.client.Ping(ctx); err == nil {
+	// Fast path: a pool already exists — database/sql handles connection
+	// validation and recycling, so there is nothing to do (no ping, no RTT).
+	if a.client.GetDB() != nil {
 		return nil
 	}
 
-	// Slow path: dedupe concurrent reconnect attempts.
+	// Slow path: no pool yet. Dedupe concurrent bootstrap attempts.
 	ch := a.reconnectGroup.DoChan("reconnect", a.doReconnect)
 	select {
 	case res := <-ch:
@@ -469,23 +480,23 @@ type reconnectResult struct{}
 // Only one goroutine runs this at a time per key; concurrent callers share
 // its result.
 func (a *App) doReconnect() (any, error) {
-	// Reconnection is infrastructure work and must not be cancelled by any
-	// individual request context.
+	// Establishing a connection is infrastructure work and must not be
+	// cancelled by any individual request context.
 	reconnectCtx := context.Background()
 
-	// Re-check inside the leader: another reconnect (e.g. manual
-	// connect_database) may have already succeeded between our outer Ping
-	// failure and acquiring leadership.
-	if err := a.client.Ping(reconnectCtx); err == nil {
+	// Re-check inside the leader: another goroutine (e.g. a manual
+	// connect_database) may have established the pool between our outer
+	// GetDB() check and acquiring leadership.
+	if a.client.GetDB() != nil {
 		return reconnectResult{}, nil
 	}
 
-	a.logger.Debug("Database connection lost, attempting to reconnect")
+	a.logger.Debug("No database connection, attempting to establish one")
 	if err := a.tryConnect(reconnectCtx); err != nil {
-		a.logger.Error("Failed to reconnect to database", "error", err)
+		a.logger.Error("Failed to establish database connection", "error", err)
 		return reconnectResult{}, err
 	}
-	a.logger.Info("Successfully reconnected to database")
+	a.logger.Info("Successfully established database connection")
 	return reconnectResult{}, nil
 }
 
