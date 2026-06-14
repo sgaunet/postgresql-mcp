@@ -73,10 +73,10 @@ func TestPostgreSQLClient_PingWithoutConnection(t *testing.T) {
 	assert.Contains(t, err.Error(), "no database connection")
 }
 
-func TestPostgreSQLClient_GetDBWithoutConnection(t *testing.T) {
+func TestPostgreSQLClient_PoolWithoutConnection(t *testing.T) {
 	client := app.NewPostgreSQLClient()
-	db := client.GetDB()
-	assert.Nil(t, db)
+	pool := client.Pool()
+	assert.Nil(t, pool)
 }
 
 func TestPostgreSQLClient_ListDatabasesWithoutConnection(t *testing.T) {
@@ -457,9 +457,9 @@ func TestPostgreSQLClientImpl_ConnectAndClose(t *testing.T) {
 	err := client.Close()
 	assert.NoError(t, err)
 
-	// Test that GetDB returns nil when no connection
-	db := client.GetDB()
-	assert.Nil(t, db)
+	// Test that Pool returns nil when no connection
+	pool := client.Pool()
+	assert.Nil(t, pool)
 }
 
 func TestExecuteQueryEmptyResult(t *testing.T) {
@@ -744,8 +744,9 @@ func TestInjectStatementTimeout(t *testing.T) {
 	t.Run("composes with read-only injection in a single options payload", func(t *testing.T) {
 		// Issue #89: Connect chains both injections. Assert that the resulting
 		// DSN carries BOTH options inside a single options= value rather than
-		// producing a malformed second options= key (which lib/pq would
-		// silently drop the earlier one of).
+		// producing a malformed second options= key (a duplicate keyword would
+		// have the earlier value silently dropped by libpq-style DSN parsing,
+		// which pgx uses).
 		in := "host=localhost dbname=mydb"
 		stacked := app.InjectStatementTimeout(app.InjectReadOnlyOption(in), 30*time.Second)
 		assert.Contains(t, stacked, "default_transaction_read_only=on")

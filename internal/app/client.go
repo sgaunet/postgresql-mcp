@@ -2,7 +2,7 @@ package app
 
 import (
 	"context"
-	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -13,7 +13,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/lib/pq"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 const (
@@ -157,10 +158,10 @@ func injectStatementTimeout(connStr string, d time.Duration) string {
 // PostgreSQLClientImpl implements the PostgreSQLClient interface.
 //
 // db is held as atomic.Pointer so that concurrent handler goroutines can
-// load the current *sql.DB without locking, while Connect can atomically
+// load the current *pgxpool.Pool without locking, while Connect can atomically
 // swap in a freshly opened pool during reconnection (issue #83).
 type PostgreSQLClientImpl struct {
-	db atomic.Pointer[sql.DB]
+	db atomic.Pointer[pgxpool.Pool]
 }
 
 // NewPostgreSQLClient creates a new PostgreSQL client.
@@ -224,63 +225,79 @@ func maxResultRows() int {
 // The connection is configured as read-only at the PostgreSQL session level
 // to provide defense-in-depth against SQL injection attacks.
 // Pool settings can be overridden via environment variables:
-//   - POSTGRES_MCP_MAX_OPEN_CONNS (default: 10)
-//   - POSTGRES_MCP_MAX_IDLE_CONNS (default: 5, clamped to max open conns)
+//   - POSTGRES_MCP_MAX_OPEN_CONNS (pgxpool MaxConns, default: 10)
+//   - POSTGRES_MCP_MAX_IDLE_CONNS (pgxpool MinConns — connections kept warm;
+//     default: 5, clamped to max open conns)
 //   - POSTGRES_MCP_CONN_MAX_LIFETIME (seconds, default: 3600)
 //   - POSTGRES_MCP_CONN_MAX_IDLE_TIME (seconds, default: 600)
 func (c *PostgreSQLClientImpl) Connect(ctx context.Context, connectionString string) error {
 	hardenedConnStr := injectStatementTimeout(injectReadOnlyOption(connectionString), QueryTimeout())
-	db, err := sql.Open("postgres", hardenedConnStr)
+	cfg, err := pgxpool.ParseConfig(hardenedConnStr)
+	if err != nil {
+		return fmt.Errorf("failed to parse database connection config: %w", err)
+	}
+	applyPoolConfig(cfg)
+
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return fmt.Errorf("failed to open database connection: %w", err)
 	}
 
-	maxOpen, maxIdle, maxLifetime, maxIdleTime := poolConfig()
-	db.SetMaxOpenConns(maxOpen)
-	db.SetMaxIdleConns(maxIdle)
-	db.SetConnMaxLifetime(maxLifetime)
-	db.SetConnMaxIdleTime(maxIdleTime)
-
-	if err := db.PingContext(ctx); err != nil {
-		_ = db.Close()
+	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
 		return fmt.Errorf("failed to ping database: %w", err)
 	}
 
 	// Atomic swap; close any previous pool that handler goroutines may still
-	// hold a reference to. sql.DB.Close waits for in-flight queries on that
-	// handle to drain, so concurrent readers degrade gracefully.
-	if old := c.db.Swap(db); old != nil {
-		_ = old.Close()
+	// hold a reference to. pgxpool.Pool.Close waits for in-flight queries
+	// acquired from that pool to finish, so concurrent readers degrade
+	// gracefully.
+	if old := c.db.Swap(pool); old != nil {
+		old.Close()
 	}
 	return nil
 }
 
+// applyPoolConfig maps the environment-derived pool settings onto a pgxpool
+// config. POSTGRES_MCP_MAX_OPEN_CONNS becomes MaxConns and
+// POSTGRES_MCP_MAX_IDLE_CONNS becomes MinConns (connections pgxpool keeps warm);
+// clampMaxIdle in poolConfig guarantees MinConns <= MaxConns, which pgxpool
+// requires. The int->int32 conversions are safe: the values come from
+// envIntOrDefault, which only accepts small positive integers.
+func applyPoolConfig(cfg *pgxpool.Config) {
+	maxOpen, maxIdle, maxLifetime, maxIdleTime := poolConfig()
+	//nolint:gosec // pool sizes come from envIntOrDefault as small positive operator-set values, not attacker input.
+	cfg.MaxConns = int32(maxOpen)
+	//nolint:gosec // pool sizes come from envIntOrDefault as small positive operator-set values, not attacker input.
+	cfg.MinConns = int32(maxIdle)
+	cfg.MaxConnLifetime = maxLifetime
+	cfg.MaxConnIdleTime = maxIdleTime
+}
+
 // Close closes the database connection.
 func (c *PostgreSQLClientImpl) Close() error {
-	db := c.db.Swap(nil)
-	if db == nil {
+	pool := c.db.Swap(nil)
+	if pool == nil {
 		return nil
 	}
-	if err := db.Close(); err != nil {
-		return fmt.Errorf("failed to close database: %w", err)
-	}
+	pool.Close()
 	return nil
 }
 
 // Ping checks if the database connection is alive.
 func (c *PostgreSQLClientImpl) Ping(ctx context.Context) error {
-	db := c.db.Load()
-	if db == nil {
+	pool := c.db.Load()
+	if pool == nil {
 		return ErrNoDatabaseConnection
 	}
-	if err := db.PingContext(ctx); err != nil {
+	if err := pool.Ping(ctx); err != nil {
 		return fmt.Errorf("failed to ping database: %w", err)
 	}
 	return nil
 }
 
-// GetDB returns the underlying sql.DB connection.
-func (c *PostgreSQLClientImpl) GetDB() *sql.DB {
+// Pool returns the underlying pgxpool connection pool.
+func (c *PostgreSQLClientImpl) Pool() *pgxpool.Pool {
 	return c.db.Load()
 }
 
@@ -292,8 +309,8 @@ func (c *PostgreSQLClientImpl) HasConnection() bool {
 
 // ListDatabases returns a list of all databases on the server.
 func (c *PostgreSQLClientImpl) ListDatabases(ctx context.Context) ([]*DatabaseInfo, error) {
-	db := c.db.Load()
-	if db == nil {
+	pool := c.db.Load()
+	if pool == nil {
 		return nil, ErrNoDatabaseConnection
 	}
 
@@ -303,11 +320,11 @@ func (c *PostgreSQLClientImpl) ListDatabases(ctx context.Context) ([]*DatabaseIn
 		WHERE datistemplate = false
 		ORDER BY datname`
 
-	rows, err := db.QueryContext(ctx, query)
+	rows, err := pool.Query(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list databases: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer rows.Close()
 
 	var databases []*DatabaseInfo
 	for rows.Next() {
@@ -326,13 +343,13 @@ func (c *PostgreSQLClientImpl) ListDatabases(ctx context.Context) ([]*DatabaseIn
 
 // GetCurrentDatabase returns the name of the current database.
 func (c *PostgreSQLClientImpl) GetCurrentDatabase(ctx context.Context) (string, error) {
-	db := c.db.Load()
-	if db == nil {
+	pool := c.db.Load()
+	if pool == nil {
 		return "", ErrNoDatabaseConnection
 	}
 
 	var dbName string
-	err := db.QueryRowContext(ctx, "SELECT current_database()").Scan(&dbName)
+	err := pool.QueryRow(ctx, "SELECT current_database()").Scan(&dbName)
 	if err != nil {
 		return "", fmt.Errorf("failed to get current database: %w", err)
 	}
@@ -342,8 +359,8 @@ func (c *PostgreSQLClientImpl) GetCurrentDatabase(ctx context.Context) (string, 
 
 // ListSchemas returns a list of schemas in the current database.
 func (c *PostgreSQLClientImpl) ListSchemas(ctx context.Context) ([]*SchemaInfo, error) {
-	db := c.db.Load()
-	if db == nil {
+	pool := c.db.Load()
+	if pool == nil {
 		return nil, ErrNoDatabaseConnection
 	}
 
@@ -353,11 +370,11 @@ func (c *PostgreSQLClientImpl) ListSchemas(ctx context.Context) ([]*SchemaInfo, 
 		WHERE schema_name NOT IN ('information_schema', 'pg_catalog', 'pg_toast')
 		ORDER BY schema_name`
 
-	rows, err := db.QueryContext(ctx, query)
+	rows, err := pool.Query(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list schemas: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer rows.Close()
 
 	var schemas []*SchemaInfo
 	for rows.Next() {
@@ -376,8 +393,8 @@ func (c *PostgreSQLClientImpl) ListSchemas(ctx context.Context) ([]*SchemaInfo, 
 
 // ListTables returns a list of tables in the specified schema.
 func (c *PostgreSQLClientImpl) ListTables(ctx context.Context, schema string) ([]*TableInfo, error) {
-	db := c.db.Load()
-	if db == nil {
+	pool := c.db.Load()
+	if pool == nil {
 		return nil, ErrNoDatabaseConnection
 	}
 
@@ -403,11 +420,11 @@ func (c *PostgreSQLClientImpl) ListTables(ctx context.Context, schema string) ([
 		WHERE schemaname = $1
 		ORDER BY tablename`
 
-	rows, err := db.QueryContext(ctx, query, schema)
+	rows, err := pool.Query(ctx, query, schema)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list tables: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer rows.Close()
 
 	var tables []*TableInfo
 	for rows.Next() {
@@ -429,8 +446,8 @@ func (c *PostgreSQLClientImpl) ListTables(ctx context.Context, schema string) ([
 // it falls back to pg_class.reltuples in the same SELECT, so the result remains O(1) round-trips
 // regardless of how many tables show empty statistics.
 func (c *PostgreSQLClientImpl) ListTablesWithStats(ctx context.Context, schema string) ([]*TableInfo, error) {
-	db := c.db.Load()
-	if db == nil {
+	pool := c.db.Load()
+	if pool == nil {
 		return nil, ErrNoDatabaseConnection
 	}
 
@@ -484,11 +501,11 @@ func (c *PostgreSQLClientImpl) ListTablesWithStats(ctx context.Context, schema s
 			ON c.relname = t.tablename AND c.relnamespace = n.oid AND c.relkind IN ('r', 'p')
 		ORDER BY t.tablename`
 
-	rows, err := db.QueryContext(ctx, query, schema)
+	rows, err := pool.Query(ctx, query, schema)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list tables with stats: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer rows.Close()
 
 	var tables []*TableInfo
 	for rows.Next() {
@@ -503,14 +520,14 @@ func (c *PostgreSQLClientImpl) ListTablesWithStats(ctx context.Context, schema s
 		return nil, fmt.Errorf("failed to iterate table rows with stats: %w", err)
 	}
 
-	c.refineZeroRowCounts(ctx, db, tables)
+	c.refineZeroRowCounts(ctx, tables)
 	return tables, nil
 }
 
 // DescribeTable returns detailed column information for a table.
 func (c *PostgreSQLClientImpl) DescribeTable(ctx context.Context, schema, table string) ([]*ColumnInfo, error) {
-	db := c.db.Load()
-	if db == nil {
+	pool := c.db.Load()
+	if pool == nil {
 		return nil, ErrNoDatabaseConnection
 	}
 
@@ -528,11 +545,11 @@ func (c *PostgreSQLClientImpl) DescribeTable(ctx context.Context, schema, table 
 		WHERE table_schema = $1 AND table_name = $2
 		ORDER BY ordinal_position`
 
-	rows, err := db.QueryContext(ctx, query, schema, table)
+	rows, err := pool.Query(ctx, query, schema, table)
 	if err != nil {
 		return nil, fmt.Errorf("failed to describe table: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer rows.Close()
 
 	var columns []*ColumnInfo
 	for rows.Next() {
@@ -557,8 +574,8 @@ func (c *PostgreSQLClientImpl) DescribeTable(ctx context.Context, schema, table 
 
 // GetTableStats returns statistics for a specific table.
 func (c *PostgreSQLClientImpl) GetTableStats(ctx context.Context, schema, table string) (*TableInfo, error) {
-	db := c.db.Load()
-	if db == nil {
+	pool := c.db.Load()
+	if pool == nil {
 		return nil, ErrNoDatabaseConnection
 	}
 
@@ -587,16 +604,16 @@ func (c *PostgreSQLClientImpl) GetTableStats(ctx context.Context, schema, table 
 			ON s.schemaname = n.nspname AND s.relname = c.relname
 		WHERE n.nspname = $1 AND c.relname = $2 AND c.relkind IN ('r', 'p')`
 
-	var rowCount sql.NullInt64
-	err := db.QueryRowContext(ctx, estimateQuery, schema, table).Scan(&rowCount)
+	var rowCount *int64
+	err := pool.QueryRow(ctx, estimateQuery, schema, table).Scan(&rowCount)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, fmt.Errorf("table %s.%s: %w", schema, table, ErrTableNotFound)
 		}
 		return nil, fmt.Errorf("failed to get table stats: %w", err)
 	}
-	if rowCount.Valid {
-		tableInfo.RowCount = rowCount.Int64
+	if rowCount != nil {
+		tableInfo.RowCount = *rowCount
 	}
 
 	// If the estimate is 0, fall back to an exact COUNT(*) for freshly written
@@ -604,13 +621,11 @@ func (c *PostgreSQLClientImpl) GetTableStats(ctx context.Context, schema, table 
 	// The fallback is bounded by countFallbackTimeout so a single billion-row
 	// table cannot tie up a pool connection for minutes (issue #90).
 	if tableInfo.RowCount == 0 {
-		countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s.%s",
-			pq.QuoteIdentifier(schema),
-			pq.QuoteIdentifier(table))
+		countQuery := "SELECT COUNT(*) FROM " + pgx.Identifier{schema, table}.Sanitize()
 		countCtx, cancel := context.WithTimeout(ctx, countFallbackTimeout)
 		defer cancel()
 		var actualCount int64
-		if err := db.QueryRowContext(countCtx, countQuery).Scan(&actualCount); err == nil {
+		if err := pool.QueryRow(countCtx, countQuery).Scan(&actualCount); err == nil {
 			tableInfo.RowCount = actualCount
 		}
 	}
@@ -620,8 +635,8 @@ func (c *PostgreSQLClientImpl) GetTableStats(ctx context.Context, schema, table 
 
 // ListIndexes returns a list of indexes for the specified table.
 func (c *PostgreSQLClientImpl) ListIndexes(ctx context.Context, schema, table string) ([]*IndexInfo, error) {
-	db := c.db.Load()
-	if db == nil {
+	pool := c.db.Load()
+	if pool == nil {
 		return nil, ErrNoDatabaseConnection
 	}
 
@@ -647,25 +662,22 @@ func (c *PostgreSQLClientImpl) ListIndexes(ctx context.Context, schema, table st
 		GROUP BY i.relname, t.relname, ix.indisunique, ix.indisprimary, am.amname
 		ORDER BY i.relname`
 
-	rows, err := db.QueryContext(ctx, query, schema, table)
+	rows, err := pool.Query(ctx, query, schema, table)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list indexes: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer rows.Close()
 
 	var indexes []*IndexInfo
 	for rows.Next() {
 		var index IndexInfo
-		var columns pq.StringArray
+		// pgx scans a PostgreSQL text[] directly into a []string.
 		if err := rows.Scan(
-			&index.Name, &index.Table, &columns,
+			&index.Name, &index.Table, &index.Columns,
 			&index.IsUnique, &index.IsPrimary, &index.IndexType,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan index row: %w", err)
 		}
-
-		// Convert pq.StringArray to []string
-		index.Columns = []string(columns)
 
 		indexes = append(indexes, &index)
 	}
@@ -678,7 +690,7 @@ func (c *PostgreSQLClientImpl) ListIndexes(ctx context.Context, schema, table st
 
 // copySingleQuotedLiteral copies a single-quoted string literal from query[start]
 // (which must be a single quote) into result, returning the new index after the
-// closing quote. Handles escaped quotes (''). It walks bytes rather than runes:
+// closing quote. Handles escaped quotes (”). It walks bytes rather than runes:
 // every SQL token involved is ASCII, and UTF-8 continuation bytes (>= 0x80) never
 // collide with it, so multibyte content is copied through verbatim.
 func copySingleQuotedLiteral(query string, start int, result *strings.Builder) int {
@@ -843,44 +855,77 @@ func validateQuery(query string) error {
 	return nil
 }
 
-// processRows processes query result rows and handles type conversion.
-// maxRows limits the number of rows returned to prevent memory exhaustion.
-func processRows(rows *sql.Rows, maxRows int) ([][]any, error) {
-	columns, err := rows.Columns()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get columns: %w", err)
+// processRows reads query result rows into native Go values. maxRows limits the
+// number of rows returned to prevent memory exhaustion. Column names come from
+// the row description; cell values come from pgx's native decoding (Values),
+// normalized for stable JSON serialization.
+func processRows(rows pgx.Rows, maxRows int) ([]string, [][]any, error) {
+	fields := rows.FieldDescriptions()
+	columns := make([]string, len(fields))
+	for i := range fields {
+		columns[i] = fields[i].Name
 	}
 
-	// Preallocate the result (capped so a large configurable maxRows can't force a
-	// huge up-front allocation) and reuse a single valuePtrs slice across rows:
-	// rows.Scan copies into the pointed-to values during the call and does not
-	// retain the pointer slice, so it is safe to reuse.
+	// Preallocate the result capped so a large configurable maxRows can't force a
+	// huge up-front allocation. rows.Values allocates a fresh slice per row, so
+	// each appended row is safe to retain.
 	result := make([][]any, 0, min(maxRows, rowCapHint))
-	valuePtrs := make([]any, len(columns))
 	for rows.Next() {
 		if len(result) >= maxRows {
-			return nil, fmt.Errorf("result set exceeded %d rows: %w", maxRows, ErrResultTooLarge)
+			return nil, nil, fmt.Errorf("result set exceeded %d rows: %w", maxRows, ErrResultTooLarge)
 		}
 
-		values := make([]any, len(columns)) // per-row: escapes into result, must stay fresh
-		for i := range values {
-			valuePtrs[i] = &values[i]
+		values, err := rows.Values()
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to read row values: %w", err)
 		}
-
-		if err := rows.Scan(valuePtrs...); err != nil {
-			return nil, fmt.Errorf("failed to scan row: %w", err)
-		}
-
-		// Convert []byte to string for easier JSON serialization
-		for i, v := range values {
-			if b, ok := v.([]byte); ok {
-				values[i] = string(b)
-			}
-		}
-
+		normalizeRowValues(values)
 		result = append(result, values)
 	}
-	return result, nil
+
+	if err := rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("failed to iterate query rows: %w", err)
+	}
+	return columns, result, nil
+}
+
+// normalizeRowValues rewrites natively-decoded pgx cell values into stable,
+// JSON-friendly forms. int/float/bool/string/time.Time already serialize
+// cleanly and pass through untouched. []byte (bytea and unmapped text) becomes a
+// string, preserving the pre-pgx behavior. uuid decodes to a [16]byte, which is
+// rendered as a canonical UUID string. Remaining decoded types that implement
+// driver.Valuer (e.g. pgtype.Numeric) are reduced to a primitive so a result
+// never carries an opaque struct into the JSON tool response.
+func normalizeRowValues(values []any) {
+	for i, v := range values {
+		switch t := v.(type) {
+		case []byte:
+			values[i] = string(t)
+		case [16]byte:
+			values[i] = encodeUUID(t)
+		case driver.Valuer:
+			values[i] = valuerToPrimitive(t)
+		}
+	}
+}
+
+// valuerToPrimitive reduces a driver.Valuer to a JSON-friendly primitive,
+// falling back to its formatted form when the value cannot be resolved.
+func valuerToPrimitive(v driver.Valuer) any {
+	dv, err := v.Value()
+	if err != nil {
+		return fmt.Sprintf("%v", v)
+	}
+	if b, ok := dv.([]byte); ok {
+		return string(b)
+	}
+	return dv
+}
+
+// encodeUUID renders the 16 raw bytes of a PostgreSQL uuid as the canonical
+// 8-4-4-4-12 lowercase hexadecimal string.
+func encodeUUID(b [16]byte) string {
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
 // ExecuteQuery executes a SELECT query and returns the results.
@@ -889,29 +934,20 @@ func (c *PostgreSQLClientImpl) ExecuteQuery(ctx context.Context, query string, a
 		return nil, err
 	}
 
-	db := c.db.Load()
-	if db == nil {
+	pool := c.db.Load()
+	if pool == nil {
 		return nil, ErrNoDatabaseConnection
 	}
 
-	rows, err := db.QueryContext(ctx, query, args...)
+	rows, err := pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute query: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer rows.Close()
 
-	columns, err := rows.Columns()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get columns: %w", err)
-	}
-
-	result, err := processRows(rows, maxResultRows())
+	columns, result, err := processRows(rows, maxResultRows())
 	if err != nil {
 		return nil, err
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("failed to iterate query rows: %w", err)
 	}
 	return &QueryResult{
 		Columns:  columns,
@@ -931,8 +967,8 @@ func (c *PostgreSQLClientImpl) ExplainQuery(ctx context.Context, query string, a
 		return nil, err
 	}
 
-	db := c.db.Load()
-	if db == nil {
+	pool := c.db.Load()
+	if pool == nil {
 		return nil, ErrNoDatabaseConnection
 	}
 
@@ -940,26 +976,19 @@ func (c *PostgreSQLClientImpl) ExplainQuery(ctx context.Context, query string, a
 	if analyze {
 		prefix = "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) "
 	}
-	explainQuery := prefix + query //nolint:gosec // query is validated by validateQuery above (SELECT/WITH only)
+	// query is validated by validateQuery above (SELECT/WITH only), so the
+	// EXPLAIN-prefixed string carries no untrusted statement.
+	explainQuery := prefix + query
 
-	rows, err := db.QueryContext(ctx, explainQuery, args...)
+	rows, err := pool.Query(ctx, explainQuery, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute explain query: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer rows.Close()
 
-	columns, err := rows.Columns()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get columns: %w", err)
-	}
-
-	result, err := processRows(rows, maxResultRows())
+	columns, result, err := processRows(rows, maxResultRows())
 	if err != nil {
 		return nil, err
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("failed to iterate query rows: %w", err)
 	}
 	return &QueryResult{
 		Columns:  columns,
@@ -973,7 +1002,11 @@ func (c *PostgreSQLClientImpl) ExplainQuery(ctx context.Context, query string, a
 // fallback. This handles freshly written tables that pg_stat has not yet
 // observed and that no ANALYZE has touched, without re-introducing the
 // unbounded N+1 / long-running COUNT(*) pattern of issue #90.
-func (c *PostgreSQLClientImpl) refineZeroRowCounts(ctx context.Context, db *sql.DB, tables []*TableInfo) {
+func (c *PostgreSQLClientImpl) refineZeroRowCounts(ctx context.Context, tables []*TableInfo) {
+	pool := c.db.Load()
+	if pool == nil {
+		return
+	}
 	probed := 0
 	for _, table := range tables {
 		if probed >= maxCountFallbackTables {
@@ -983,15 +1016,13 @@ func (c *PostgreSQLClientImpl) refineZeroRowCounts(ctx context.Context, db *sql.
 			continue
 		}
 
-		// pq.QuoteIdentifier escapes both schema and table to defend against
+		// pgx.Identifier.Sanitize escapes both schema and table to defend against
 		// SQL injection via malicious identifiers.
-		countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s.%s",
-			pq.QuoteIdentifier(table.Schema),
-			pq.QuoteIdentifier(table.Name))
+		countQuery := "SELECT COUNT(*) FROM " + pgx.Identifier{table.Schema, table.Name}.Sanitize()
 
 		countCtx, cancel := context.WithTimeout(ctx, countFallbackTimeout)
 		var actualCount int64
-		if err := db.QueryRowContext(countCtx, countQuery).Scan(&actualCount); err == nil {
+		if err := pool.QueryRow(countCtx, countQuery).Scan(&actualCount); err == nil {
 			table.RowCount = actualCount
 		}
 		cancel()

@@ -16,7 +16,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/lib/pq"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/sylvain/postgresql-mcp/internal/app"
@@ -205,7 +205,7 @@ func handleConnectDatabaseRequest(
 	// Attempt to connect
 	if err := appInstance.Connect(qctx, connectionString); err != nil {
 		// Issue #88: pre-auth errors leak host/port (*net.OpError), username,
-		// and auth method (*pq.Error.Message). Return a fixed generic
+		// and auth method (*pgconn.PgError.Message). Return a fixed generic
 		// message regardless of error class; the full chain is logged above.
 		debugLogger.Error("Failed to connect to database", "error", err)
 		return mcp.NewToolResultError(
@@ -270,9 +270,10 @@ func setupConnectDatabaseTool(s *server.MCPServer, appInstance *app.App, debugLo
 
 // setupListDatabasesTool creates and registers the list_databases tool.
 //
-//nolint:dupl // structurally parallel to setupListSchemasTool by design; both
 // follow the same no-arg list → JSON → return shape, and merging them into a
 // generic registrar would obscure rather than clarify the tool wiring.
+//
+//nolint:dupl // structurally parallel to setupListSchemasTool by design; both
 func setupListDatabasesTool(s *server.MCPServer, appInstance *app.App, debugLogger *slog.Logger) {
 	listDBTool := mcp.NewTool("list_databases",
 		mcp.WithDescription("List all databases on the PostgreSQL server"),
@@ -420,10 +421,10 @@ func marshalToJSON(data any, debugLogger *slog.Logger, errorMsg string) ([]byte,
 
 // publicError formats an error for the MCP caller while suppressing the
 // server-version, host/port, schema/table/column, and source-location fields
-// exposed by *pq.Error. Only Message and the SQLSTATE Code.Name() survive;
-// Detail, Hint, Where, Routine, File, Line, Schema, Table, Column,
-// DataTypeName, and Constraint are dropped. Non-pq errors are passed through
-// unchanged — at the call sites that use this helper they are app-level
+// exposed by *pgconn.PgError. Only Message and the SQLSTATE Code survive;
+// Detail, Hint, Where, Routine, File, Line, SchemaName, TableName, ColumnName,
+// DataTypeName, and ConstraintName are dropped. Non-PgError errors are passed
+// through unchanged — at the call sites that use this helper they are app-level
 // sentinels (e.g. ErrConnectionRequired, ErrQueryRequired) or
 // already-curated wrapped errors. The full error chain is preserved in the
 // internal log (the caller logs err immediately before calling publicError).
@@ -433,15 +434,15 @@ func marshalToJSON(data any, debugLogger *slog.Logger, errorMsg string) ([]byte,
 // (fmt.Errorf("failed to <op>: %w", err)); publicError adds none of its own, so
 // handlers no longer double-prefix the message. See issue #103.
 func publicError(err error) string {
-	var pqErr *pq.Error
-	if errors.As(err, &pqErr) {
-		sanitized := fmt.Sprintf("%s (SQLSTATE %s)", pqErr.Message, pqErr.Code.Name())
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		sanitized := fmt.Sprintf("%s (SQLSTATE %s)", pgErr.Message, pgErr.Code)
 		// Preserve any wrapping the App layer added (e.g. "failed to list
-		// databases: ") while replacing the raw "pq: <message>" text with the
-		// sanitized form. The pq sensitive fields (Detail, Hint, Where, ...) are
-		// never part of (*pq.Error).Error(), so they cannot leak here.
+		// databases: ") while replacing the raw error text with the sanitized
+		// form. The PgError sensitive fields (Detail, Hint, Where, ...) are never
+		// part of (*pgconn.PgError).Error(), so they cannot leak here.
 		full := err.Error()
-		if raw := pqErr.Error(); strings.Contains(full, raw) {
+		if raw := pgErr.Error(); strings.Contains(full, raw) {
 			return strings.Replace(full, raw, sanitized, 1)
 		}
 		return sanitized
@@ -693,7 +694,7 @@ ENVIRONMENT VARIABLES (OPTIONAL):
 
   Configuration:
     POSTGRES_MCP_MAX_OPEN_CONNS     Maximum open database connections (default: 10)
-    POSTGRES_MCP_MAX_IDLE_CONNS     Maximum idle database connections (default: 5)
+    POSTGRES_MCP_MAX_IDLE_CONNS     Minimum connections kept warm (default: 5)
     POSTGRES_MCP_CONN_MAX_LIFETIME  Connection max lifetime in seconds (default: 3600)
     POSTGRES_MCP_CONN_MAX_IDLE_TIME Connection max idle time in seconds (default: 600)
     POSTGRES_MCP_MAX_RESULT_ROWS    Maximum rows returned per query (default: 10000)

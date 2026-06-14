@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lib/pq"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -399,12 +399,12 @@ func TestBuildConnectionString_AcceptsAllValidSSLModes(t *testing.T) {
 // previously have been embedded verbatim into the URL.
 func TestBuildConnectionString_RejectsInvalidSSLMode(t *testing.T) {
 	cases := []string{
-		"off",                  // not a libpq sslmode
-		"true",                 // not a libpq sslmode
-		"prefer&extra=value",   // URL-parameter injection
-		"DISABLE",              // libpq is case-sensitive
-		" require",             // leading whitespace
-		"verify-full;DROP",     // would not actually inject SQL but is plainly wrong
+		"off",                // not a libpq sslmode
+		"true",               // not a libpq sslmode
+		"prefer&extra=value", // URL-parameter injection
+		"DISABLE",            // libpq is case-sensitive
+		" require",           // leading whitespace
+		"verify-full;DROP",   // would not actually inject SQL but is plainly wrong
 	}
 	for _, sm := range cases {
 		t.Run(sm, func(t *testing.T) {
@@ -467,26 +467,26 @@ func (s *stubFailingClient) ExplainQuery(_ context.Context, _ string, _ bool, _ 
 }
 
 // TestPublicError_StripsLibPqMetadata locks in that the helper extracts only
-// Message and the SQLSTATE Code.Name() from *pq.Error, dropping every other
+// Message and the SQLSTATE Code from *pgconn.PgError, dropping every other
 // field that could leak server internals (Detail / Hint / Where / Routine /
-// File / Line / Schema / Table / Column / Constraint / DataTypeName). Also
-// covers the wrapped-error path through errors.As (issue #88).
+// File / Line / SchemaName / TableName / ColumnName / ConstraintName /
+// DataTypeName). Also covers the wrapped-error path through errors.As (issue #88).
 func TestPublicError_StripsLibPqMetadata(t *testing.T) {
-	pqErr := &pq.Error{
-		Code:         "42P01", // undefined_table
-		Severity:     "ERROR",
-		Message:      `relation "users" does not exist`,
-		Detail:       "SECRET-DETAIL",
-		Hint:         "SECRET-HINT",
-		Where:        "SECRET-WHERE",
-		Routine:      "SECRET-ROUTINE",
-		File:         "SECRET-FILE",
-		Line:         "999",
-		Schema:       "SECRET-SCHEMA",
-		Table:        "SECRET-TABLE",
-		Column:       "SECRET-COLUMN",
-		Constraint:   "SECRET-CONSTRAINT",
-		DataTypeName: "SECRET-DATATYPE",
+	pgErr := &pgconn.PgError{
+		Code:           "42P01", // undefined_table
+		Severity:       "ERROR",
+		Message:        `relation "users" does not exist`,
+		Detail:         "SECRET-DETAIL",
+		Hint:           "SECRET-HINT",
+		Where:          "SECRET-WHERE",
+		Routine:        "SECRET-ROUTINE",
+		File:           "SECRET-FILE",
+		Line:           999,
+		SchemaName:     "SECRET-SCHEMA",
+		TableName:      "SECRET-TABLE",
+		ColumnName:     "SECRET-COLUMN",
+		ConstraintName: "SECRET-CONSTRAINT",
+		DataTypeName:   "SECRET-DATATYPE",
 	}
 	leaks := []string{
 		"SECRET-DETAIL", "SECRET-HINT", "SECRET-WHERE",
@@ -495,21 +495,21 @@ func TestPublicError_StripsLibPqMetadata(t *testing.T) {
 		"SECRET-DATATYPE",
 	}
 
-	t.Run("direct pq.Error", func(t *testing.T) {
-		out := publicError(pqErr)
+	t.Run("direct PgError", func(t *testing.T) {
+		out := publicError(pgErr)
 		assert.Contains(t, out, `relation "users" does not exist`, "Message must survive")
-		assert.Contains(t, out, "undefined_table", "SQLSTATE name must survive (42P01 -> undefined_table)")
+		assert.Contains(t, out, "42P01", "SQLSTATE code must survive")
 		for _, leak := range leaks {
 			assert.NotContains(t, out, leak, "leak %q must not appear", leak)
 		}
 	})
 
-	t.Run("wrapped pq.Error (errors.As must unwrap)", func(t *testing.T) {
-		wrapped := fmt.Errorf("outer wrap: %w", pqErr)
+	t.Run("wrapped PgError (errors.As must unwrap)", func(t *testing.T) {
+		wrapped := fmt.Errorf("outer wrap: %w", pgErr)
 		out := publicError(wrapped)
 		assert.Contains(t, out, "outer wrap:", "App-layer wrap prefix must be preserved")
 		assert.Contains(t, out, `relation "users" does not exist`)
-		assert.Contains(t, out, "undefined_table")
+		assert.Contains(t, out, "42P01")
 		for _, leak := range leaks {
 			assert.NotContains(t, out, leak)
 		}
@@ -540,12 +540,12 @@ func TestPublicError_PassesThroughSentinelErrors(t *testing.T) {
 
 // TestHandleConnectDatabaseRequest_DoesNotLeakErrorDetails exercises the
 // connect_database handler with a stub client whose Connect returns a
-// fully-loaded *pq.Error simulating an authentication failure that exposes
+// fully-loaded *pgconn.PgError simulating an authentication failure that exposes
 // host, port, username, and PostgreSQL source location. The handler must
 // return the fixed generic message regardless — none of the sensitive
 // fields may appear in the MCP response text (issue #88).
 func TestHandleConnectDatabaseRequest_DoesNotLeakErrorDetails(t *testing.T) {
-	leakyErr := &pq.Error{
+	leakyErr := &pgconn.PgError{
 		Code:    "28P01", // invalid_password
 		Message: `password authentication failed for user "admin"`,
 		Detail:  "Connection from 10.0.0.5:5432 rejected",
@@ -553,7 +553,7 @@ func TestHandleConnectDatabaseRequest_DoesNotLeakErrorDetails(t *testing.T) {
 		Where:   "auth.c line 1234",
 		Routine: "auth_failed",
 		File:    "auth.c",
-		Line:    "1234",
+		Line:    1234,
 	}
 	silent := slog.New(slog.DiscardHandler)
 
@@ -583,14 +583,14 @@ func TestHandleConnectDatabaseRequest_DoesNotLeakErrorDetails(t *testing.T) {
 	// None of the leak markers — username, host, port, auth method, server-
 	// internal source location, server-config hint — may appear.
 	leaks := []string{
-		"admin",      // username (from Message)
-		"password",   // auth method (from Message)
-		"10.0.0.5",   // host (from Detail)
-		"5432",       // port (from Detail)
-		"pg_hba",     // server config (from Hint)
-		"auth.c",     // source file (from File / Where)
+		"admin",       // username (from Message)
+		"password",    // auth method (from Message)
+		"10.0.0.5",    // host (from Detail)
+		"5432",        // port (from Detail)
+		"pg_hba",      // server config (from Hint)
+		"auth.c",      // source file (from File / Where)
 		"auth_failed", // routine
-		"28P01",      // SQLSTATE — pre-auth state must not be exposed at all
+		"28P01",       // SQLSTATE — pre-auth state must not be exposed at all
 	}
 	for _, leak := range leaks {
 		assert.NotContains(t, tc.Text, leak, "connect_database response leaked %q", leak)

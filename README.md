@@ -127,8 +127,8 @@ export DATABASE_URL="postgres://user:password@localhost:5432/mydb?sslmode=prefer
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `POSTGRES_MCP_MAX_OPEN_CONNS` | Maximum open database connections | `10` |
-| `POSTGRES_MCP_MAX_IDLE_CONNS` | Maximum idle database connections | `5` |
+| `POSTGRES_MCP_MAX_OPEN_CONNS` | Maximum open database connections (pgxpool `MaxConns`) | `10` |
+| `POSTGRES_MCP_MAX_IDLE_CONNS` | Minimum connections kept warm (pgxpool `MinConns`); clamped to the open limit | `5` |
 | `POSTGRES_MCP_CONN_MAX_LIFETIME` | Connection max lifetime in seconds | `3600` |
 | `POSTGRES_MCP_CONN_MAX_IDLE_TIME` | Connection max idle time in seconds | `600` |
 | `POSTGRES_MCP_MAX_RESULT_ROWS` | Maximum rows returned per query | `10000` |
@@ -206,7 +206,7 @@ go test -run "TestIntegration" ./...
 
 ### Dependencies
 - [mcp-go](https://github.com/mark3labs/mcp-go) - MCP protocol implementation
-- [lib/pq](https://github.com/lib/pq) - PostgreSQL driver
+- [pgx/v5](https://github.com/jackc/pgx) - PostgreSQL driver and connection pool (pgxpool)
 - [testcontainers-go](https://github.com/testcontainers/testcontainers-go) - Integration testing with Docker containers
 
 ## Troubleshooting
