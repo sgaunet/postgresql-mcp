@@ -1,3 +1,4 @@
+// Package app implements the PostgreSQL MCP tool handlers and client abstraction.
 package app
 
 import (
@@ -330,7 +331,7 @@ func (a *App) ExecuteQuery(ctx context.Context, opts *ExecuteQueryOptions) (*Que
 
 	result, err := a.client.ExecuteQuery(ctx, query, opts.Args...)
 	if err != nil {
-		if rejErr, ok := a.rejectQuery(opts.Query, err); ok {
+		if ok, rejErr := a.rejectQuery(opts.Query, err); ok {
 			return nil, rejErr
 		}
 		a.logger.Error("Failed to execute query", "error", err, "query", truncateQuery(opts.Query, maxQueryLogLen))
@@ -372,7 +373,7 @@ func (a *App) ExplainQuery(ctx context.Context, query string, analyze bool, args
 
 	result, err := a.client.ExplainQuery(ctx, query, analyze, args...)
 	if err != nil {
-		if rejErr, ok := a.rejectQuery(query, err); ok {
+		if ok, rejErr := a.rejectQuery(query, err); ok {
 			return nil, rejErr
 		}
 		a.logger.Error("Failed to explain query", "error", err, "query", truncateQuery(query, maxQueryLogLen))
@@ -503,7 +504,7 @@ func (a *App) doReconnect() (any, error) {
 // rejectQuery maps a query-rejection sentinel error to a logged security event
 // and a "query rejected" wrapped error. ok is false when err is not a rejection
 // sentinel, signalling the caller to fall through to its generic error handling.
-func (a *App) rejectQuery(query string, err error) (error, bool) {
+func (a *App) rejectQuery(query string, err error) (bool, error) {
 	var event string
 	switch {
 	case errors.Is(err, ErrResultTooLarge):
@@ -515,10 +516,10 @@ func (a *App) rejectQuery(query string, err error) (error, bool) {
 	case errors.Is(err, ErrMultiStatementQuery):
 		event = "multi_statement_query"
 	default:
-		return nil, false
+		return false, nil
 	}
 	a.logSecurityEvent(event, query, err)
-	return fmt.Errorf("query rejected: %w", err), true
+	return true, fmt.Errorf("query rejected: %w", err)
 }
 
 // logSecurityEvent logs a security-relevant event (e.g., rejected query)

@@ -19,10 +19,8 @@ linters:
     - exhaustruct
     - tagliatelle
     - noinlineerr
-    - revive
-    - ireturn
-    - misspell
     - lll  # Disable line length linter
+    - gomodguard
 
   settings:
     cyclop:
