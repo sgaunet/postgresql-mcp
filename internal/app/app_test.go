@@ -2,7 +2,6 @@ package app_test
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"log/slog"
 	"testing"
@@ -110,20 +109,8 @@ func (m *MockPostgreSQLClient) ExplainQuery(ctx context.Context, query string, a
 	return mockArgs.Get(0).(*app.QueryResult), mockArgs.Error(1)
 }
 
-func (m *MockPostgreSQLClient) GetDB() *sql.DB {
-	args := m.Called()
-	if args.Get(0) == nil {
-		return nil
-	}
-	return args.Get(0).(*sql.DB)
-}
-
-// stubDB returns a non-nil *sql.DB — a lazily-initialized pool that never
-// actually opens a connection — so mock-based tests can simulate "a connection
-// pool exists" for ensureConnection's GetDB() gate (issue #93).
-func stubDB() *sql.DB {
-	db, _ := sql.Open("postgres", "")
-	return db
+func (m *MockPostgreSQLClient) HasConnection() bool {
+	return m.Called().Bool(0)
 }
 
 func TestNew(t *testing.T) {
@@ -142,7 +129,7 @@ func TestApp_NoProactivePingOnEstablishedConnection(t *testing.T) {
 	mockClient := &MockPostgreSQLClient{}
 	a := app.New(mockClient)
 
-	mockClient.On("GetDB").Return(stubDB())
+	mockClient.On("HasConnection").Return(true)
 	mockClient.On("ExecuteQuery", mock.Anything, "SELECT 1", []any(nil)).
 		Return(&app.QueryResult{Columns: []string{"?column?"}, Rows: [][]any{{1}}, RowCount: 1}, nil)
 
@@ -195,8 +182,8 @@ func TestApp_ValidateConnection(t *testing.T) {
 	mockClient := &MockPostgreSQLClient{}
 	a := app.New(mockClient)
 
-	// ValidateConnection ensures a pool exists (GetDB) and then actively pings.
-	mockClient.On("GetDB").Return(stubDB())
+	// ValidateConnection ensures a pool exists (HasConnection) and then actively pings.
+	mockClient.On("HasConnection").Return(true)
 	mockClient.On("Ping", mock.Anything).Return(nil)
 
 	err := a.ValidateConnection(context.Background())
@@ -219,7 +206,7 @@ func TestApp_ValidateConnectionPingError(t *testing.T) {
 	// A live pool exists, but the explicit liveness ping fails. ValidateConnection
 	// must surface that ping error (issue #93: only ValidateConnection still pings).
 	pingError := errors.New("ping failed")
-	mockClient.On("GetDB").Return(stubDB())
+	mockClient.On("HasConnection").Return(true)
 	mockClient.On("Ping", mock.Anything).Return(pingError)
 
 	err := a.ValidateConnection(context.Background())
@@ -237,7 +224,7 @@ func TestApp_ListDatabases(t *testing.T) {
 		{Name: "db2", Owner: "user2", Encoding: "UTF8"},
 	}
 
-	mockClient.On("GetDB").Return(stubDB())
+	mockClient.On("HasConnection").Return(true)
 	mockClient.On("ListDatabases", mock.Anything).Return(expectedDatabases, nil)
 
 	databases, err := a.ListDatabases(context.Background())
@@ -253,7 +240,7 @@ func TestApp_ListDatabasesConnectionError(t *testing.T) {
 	// No pool yet and no connection string available (no env, no prior Connect):
 	// ensureConnection's bootstrap fails, surfacing ErrConnectionRequired wrapped
 	// with operation context.
-	mockClient.On("GetDB").Return(nil)
+	mockClient.On("HasConnection").Return(false)
 
 	databases, err := a.ListDatabases(context.Background())
 	assert.Error(t, err)
@@ -268,7 +255,7 @@ func TestApp_GetCurrentDatabase(t *testing.T) {
 
 	expectedDB := "testdb"
 
-	mockClient.On("GetDB").Return(stubDB())
+	mockClient.On("HasConnection").Return(true)
 	mockClient.On("GetCurrentDatabase", mock.Anything).Return(expectedDB, nil)
 
 	dbName, err := a.GetCurrentDatabase(context.Background())
@@ -286,7 +273,7 @@ func TestApp_ListSchemas(t *testing.T) {
 		{Name: "private", Owner: "user"},
 	}
 
-	mockClient.On("GetDB").Return(stubDB())
+	mockClient.On("HasConnection").Return(true)
 	mockClient.On("ListSchemas", mock.Anything).Return(expectedSchemas, nil)
 
 	schemas, err := a.ListSchemas(context.Background())
@@ -308,7 +295,7 @@ func TestApp_ListTables(t *testing.T) {
 		Schema: "public",
 	}
 
-	mockClient.On("GetDB").Return(stubDB())
+	mockClient.On("HasConnection").Return(true)
 	mockClient.On("ListTables", mock.Anything, "public").Return(expectedTables, nil)
 
 	tables, err := a.ListTables(context.Background(), opts)
@@ -327,7 +314,7 @@ func TestApp_ListTablesWithDefaultSchema(t *testing.T) {
 
 	opts := &app.ListTablesOptions{}
 
-	mockClient.On("GetDB").Return(stubDB())
+	mockClient.On("HasConnection").Return(true)
 	mockClient.On("ListTables", mock.Anything, app.DefaultSchema).Return(expectedTables, nil)
 
 	tables, err := a.ListTables(context.Background(), opts)
@@ -344,7 +331,7 @@ func TestApp_ListTablesWithNilOptions(t *testing.T) {
 		{Schema: "public", Name: "users", Type: "table", Owner: "user"},
 	}
 
-	mockClient.On("GetDB").Return(stubDB())
+	mockClient.On("HasConnection").Return(true)
 	mockClient.On("ListTables", mock.Anything, app.DefaultSchema).Return(expectedTables, nil)
 
 	tables, err := a.ListTables(context.Background(), nil)
@@ -373,7 +360,7 @@ func TestApp_ListTablesWithSize(t *testing.T) {
 		IncludeSize: true,
 	}
 
-	mockClient.On("GetDB").Return(stubDB())
+	mockClient.On("HasConnection").Return(true)
 	mockClient.On("ListTablesWithStats", mock.Anything, "public").Return(tablesWithStats, nil)
 
 	tables, err := a.ListTables(context.Background(), opts)
@@ -393,7 +380,7 @@ func TestApp_DescribeTable(t *testing.T) {
 		{Name: "name", DataType: "varchar(255)", IsNullable: true},
 	}
 
-	mockClient.On("GetDB").Return(stubDB())
+	mockClient.On("HasConnection").Return(true)
 	mockClient.On("DescribeTable", mock.Anything, "public", "users").Return(expectedColumns, nil)
 
 	columns, err := a.DescribeTable(context.Background(), "public", "users")
@@ -419,7 +406,7 @@ func TestApp_DescribeTableDefaultSchema(t *testing.T) {
 		{Name: "id", DataType: "integer", IsNullable: false},
 	}
 
-	mockClient.On("GetDB").Return(stubDB())
+	mockClient.On("HasConnection").Return(true)
 	mockClient.On("DescribeTable", mock.Anything, app.DefaultSchema, "users").Return(expectedColumns, nil)
 
 	columns, err := a.DescribeTable(context.Background(), "", "users")
@@ -442,7 +429,7 @@ func TestApp_ExecuteQuery(t *testing.T) {
 		Query: "SELECT id, name FROM users",
 	}
 
-	mockClient.On("GetDB").Return(stubDB())
+	mockClient.On("HasConnection").Return(true)
 	mockClient.On("ExecuteQuery", mock.Anything, "SELECT id, name FROM users", []interface{}(nil)).Return(expectedResult, nil)
 
 	result, err := a.ExecuteQuery(context.Background(), opts)
@@ -470,7 +457,7 @@ func TestApp_ExecuteQueryWithLimit(t *testing.T) {
 
 	expectedWrappedQuery := "SELECT * FROM (SELECT id, name FROM users) AS _postgres_mcp_limit_sub LIMIT 2"
 
-	mockClient.On("GetDB").Return(stubDB())
+	mockClient.On("HasConnection").Return(true)
 	mockClient.On("ExecuteQuery", mock.Anything, expectedWrappedQuery, []any(nil)).Return(limitedResult, nil)
 
 	result, err := a.ExecuteQuery(context.Background(), opts)
@@ -491,7 +478,7 @@ func TestApp_ExecuteQueryLimitTrimsTrailingSemicolon(t *testing.T) {
 
 	expectedWrappedQuery := "SELECT * FROM (SELECT 1) AS _postgres_mcp_limit_sub LIMIT 5"
 
-	mockClient.On("GetDB").Return(stubDB())
+	mockClient.On("HasConnection").Return(true)
 	mockClient.On("ExecuteQuery", mock.Anything, expectedWrappedQuery, []any(nil)).
 		Return(&app.QueryResult{Columns: []string{"?column?"}, Rows: [][]any{{1}}, RowCount: 1}, nil)
 
@@ -508,7 +495,7 @@ func TestApp_ExecuteQueryWithoutLimitPassesQueryThrough(t *testing.T) {
 		Query: "SELECT id, name FROM users",
 	}
 
-	mockClient.On("GetDB").Return(stubDB())
+	mockClient.On("HasConnection").Return(true)
 	// No wrap: original query is forwarded verbatim when Limit is unset.
 	mockClient.On("ExecuteQuery", mock.Anything, "SELECT id, name FROM users", []any(nil)).
 		Return(&app.QueryResult{Columns: []string{"id", "name"}, Rows: [][]any{}, RowCount: 0}, nil)
@@ -548,7 +535,7 @@ func TestApp_ExplainQuery(t *testing.T) {
 		RowCount: 1,
 	}
 
-	mockClient.On("GetDB").Return(stubDB())
+	mockClient.On("HasConnection").Return(true)
 	mockClient.On("ExplainQuery", mock.Anything, "SELECT * FROM users", false, []interface{}(nil)).Return(expectedResult, nil)
 
 	result, err := a.ExplainQuery(context.Background(), "SELECT * FROM users", false)
@@ -577,7 +564,7 @@ func TestApp_GetTableStats(t *testing.T) {
 		Size:     "5MB",
 	}
 
-	mockClient.On("GetDB").Return(stubDB())
+	mockClient.On("HasConnection").Return(true)
 	mockClient.On("GetTableStats", mock.Anything, "public", "users").Return(expectedStats, nil)
 
 	stats, err := a.GetTableStats(context.Background(), "public", "users")
@@ -595,7 +582,7 @@ func TestApp_ListIndexes(t *testing.T) {
 		{Name: "idx_users_email", Table: "users", Columns: []string{"email"}, IsUnique: true, IsPrimary: false},
 	}
 
-	mockClient.On("GetDB").Return(stubDB())
+	mockClient.On("HasConnection").Return(true)
 	mockClient.On("ListIndexes", mock.Anything, "public", "users").Return(expectedIndexes, nil)
 
 	indexes, err := a.ListIndexes(context.Background(), "public", "users")
@@ -666,7 +653,7 @@ func TestApp_ExecuteQuery_SecurityAudit_InvalidQuery(t *testing.T) {
 
 	opts := &app.ExecuteQueryOptions{Query: "INSERT INTO users VALUES (1)"}
 
-	mockClient.On("GetDB").Return(stubDB())
+	mockClient.On("HasConnection").Return(true)
 	mockClient.On("ExecuteQuery", mock.Anything, opts.Query, []interface{}(nil)).Return((*app.QueryResult)(nil), app.ErrInvalidQuery)
 
 	result, err := a.ExecuteQuery(context.Background(), opts)
@@ -681,7 +668,7 @@ func TestApp_ExecuteQuery_SecurityAudit_MultiStatement(t *testing.T) {
 
 	opts := &app.ExecuteQueryOptions{Query: "SELECT 1; DROP TABLE users"}
 
-	mockClient.On("GetDB").Return(stubDB())
+	mockClient.On("HasConnection").Return(true)
 	mockClient.On("ExecuteQuery", mock.Anything, opts.Query, []interface{}(nil)).Return((*app.QueryResult)(nil), app.ErrMultiStatementQuery)
 
 	result, err := a.ExecuteQuery(context.Background(), opts)
@@ -696,7 +683,7 @@ func TestApp_ExecuteQuery_SecurityAudit_ResultTooLarge(t *testing.T) {
 
 	opts := &app.ExecuteQueryOptions{Query: "SELECT * FROM huge_table"}
 
-	mockClient.On("GetDB").Return(stubDB())
+	mockClient.On("HasConnection").Return(true)
 	mockClient.On("ExecuteQuery", mock.Anything, opts.Query, []any(nil)).Return((*app.QueryResult)(nil), app.ErrResultTooLarge)
 
 	result, err := a.ExecuteQuery(context.Background(), opts)
@@ -711,7 +698,7 @@ func TestApp_ExecuteQuery_SecurityAudit_QueryTooLong(t *testing.T) {
 
 	opts := &app.ExecuteQueryOptions{Query: "SELECT very long query"}
 
-	mockClient.On("GetDB").Return(stubDB())
+	mockClient.On("HasConnection").Return(true)
 	mockClient.On("ExecuteQuery", mock.Anything, opts.Query, []interface{}(nil)).Return((*app.QueryResult)(nil), app.ErrQueryTooLong)
 
 	result, err := a.ExecuteQuery(context.Background(), opts)
@@ -726,7 +713,7 @@ func TestApp_ExplainQuery_SecurityAudit_InvalidQuery(t *testing.T) {
 
 	query := "DELETE FROM users"
 
-	mockClient.On("GetDB").Return(stubDB())
+	mockClient.On("HasConnection").Return(true)
 	mockClient.On("ExplainQuery", mock.Anything, query, false, []interface{}(nil)).Return((*app.QueryResult)(nil), app.ErrInvalidQuery)
 
 	result, err := a.ExplainQuery(context.Background(), query, false)
@@ -781,9 +768,9 @@ func TestApp_ReconnectUsesStickyConnectionString_Issue87(t *testing.T) {
 	// scenario from the issue. The sticky string must win over this.
 	t.Setenv("POSTGRES_URL", envFallback)
 
-	// The pool is gone (GetDB() == nil), so the next operation bootstraps —
+	// The pool is gone (HasConnection() == false), so the next operation bootstraps —
 	// and bootstrap must reuse the sticky connection string, not the env var.
-	mockClient.On("GetDB").Return(nil)
+	mockClient.On("HasConnection").Return(false)
 
 	require.NoError(t, a.EnsureConnection(context.Background()))
 
@@ -817,10 +804,10 @@ func TestApp_ReconnectFallsBackToEnvOnInitialBootstrap(t *testing.T) {
 
 	t.Setenv("POSTGRES_URL", envConn)
 
-	// No pool yet (GetDB() == nil) and no prior Connect → connStr is empty →
+	// No pool yet (HasConnection() == false) and no prior Connect → connStr is empty →
 	// tryConnect must fall back to env. App.Connect's internal Ping
 	// (existing-conn check) returns err → skip Close.
-	mockClient.On("GetDB").Return(nil)
+	mockClient.On("HasConnection").Return(false)
 	mockClient.On("Ping", mock.Anything).Return(errors.New("no connection"))
 	mockClient.On("Connect", mock.Anything, envConn).Return(nil)
 

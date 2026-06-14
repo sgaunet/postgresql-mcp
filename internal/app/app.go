@@ -434,7 +434,7 @@ func (a *App) tryConnect(ctx context.Context) error {
 // database/sql validates pooled connections itself and transparently opens a
 // fresh connection when a cached one has gone bad (driver.ErrBadConn), so a
 // per-request ping merely doubled latency and pool pressure. The pool's presence
-// is detected with a cheap, lock-free GetDB() load (no RTT).
+// is detected with a cheap, lock-free HasConnection() load (no RTT).
 //
 // The only case that needs work here is when no pool exists yet — initial
 // lazy bootstrap, or recovery after Disconnect. Establishing it is deduped via
@@ -454,7 +454,7 @@ func (a *App) ensureConnection(ctx context.Context) error {
 
 	// Fast path: a pool already exists — database/sql handles connection
 	// validation and recycling, so there is nothing to do (no ping, no RTT).
-	if a.client.GetDB() != nil {
+	if a.client.HasConnection() {
 		return nil
 	}
 
@@ -486,8 +486,8 @@ func (a *App) doReconnect() (any, error) {
 
 	// Re-check inside the leader: another goroutine (e.g. a manual
 	// connect_database) may have established the pool between our outer
-	// GetDB() check and acquiring leadership.
-	if a.client.GetDB() != nil {
+	// HasConnection() check and acquiring leadership.
+	if a.client.HasConnection() {
 		return reconnectResult{}, nil
 	}
 

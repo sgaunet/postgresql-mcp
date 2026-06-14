@@ -284,6 +284,12 @@ func (c *PostgreSQLClientImpl) GetDB() *sql.DB {
 	return c.db.Load()
 }
 
+// HasConnection reports whether a connection pool has been established, using a
+// cheap, lock-free atomic load (no network round-trip).
+func (c *PostgreSQLClientImpl) HasConnection() bool {
+	return c.db.Load() != nil
+}
+
 // ListDatabases returns a list of all databases on the server.
 func (c *PostgreSQLClientImpl) ListDatabases(ctx context.Context) ([]*DatabaseInfo, error) {
 	db := c.db.Load()

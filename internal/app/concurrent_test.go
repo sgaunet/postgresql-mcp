@@ -24,8 +24,8 @@ func TestApp_EnsureConnection_DedupesConcurrentReconnects_Issue83(t *testing.T) 
 	a := app.New(mockClient)
 	a.SetLogger(slog.New(slog.NewTextHandler(io.Discard, nil)))
 
-	// No pool exists yet (GetDB returns nil), so each goroutine attempts bootstrap.
-	mockClient.On("GetDB").Return(nil)
+	// No pool exists yet (HasConnection returns false), so each goroutine attempts bootstrap.
+	mockClient.On("HasConnection").Return(false)
 	// App.Connect (reached via bootstrap) pings to decide whether to close an
 	// existing pool; return an error so it skips Close.
 	mockClient.On("Ping", mock.Anything).Return(errors.New("connection lost"))
@@ -72,7 +72,7 @@ func TestApp_EnsureConnection_FollowerHonorsCtxCancel(t *testing.T) {
 	a := app.New(mockClient)
 	a.SetLogger(slog.New(slog.NewTextHandler(io.Discard, nil)))
 
-	mockClient.On("GetDB").Return(nil)
+	mockClient.On("HasConnection").Return(false)
 	// App.Connect (reached via bootstrap) pings to decide whether to close an
 	// existing pool; return an error so it skips Close.
 	mockClient.On("Ping", mock.Anything).Return(errors.New("connection lost"))
