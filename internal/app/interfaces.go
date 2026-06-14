@@ -11,14 +11,13 @@ var (
 	ErrConnectionRequired = errors.New(
 		"database connection failed. Please connect to a database using the connect_database tool",
 	)
-	ErrSchemaRequired     = errors.New("schema name is required")
-	ErrTableRequired      = errors.New("table name is required")
-	ErrQueryRequired      = errors.New("query is required")
+	ErrTableRequired       = errors.New("table name is required")
+	ErrQueryRequired       = errors.New("query is required")
 	ErrInvalidQuery        = errors.New("only SELECT and WITH queries are allowed")
 	ErrMultiStatementQuery = errors.New("multi-statement queries are not allowed")
 	ErrQueryTooLong        = errors.New("query exceeds maximum allowed length")
 	ErrResultTooLarge      = errors.New("result set exceeds maximum allowed rows")
-	ErrNoConnectionString = errors.New(
+	ErrNoConnectionString  = errors.New(
 		"no database connection string provided. " +
 			"Either call connect_database tool or set POSTGRES_URL/DATABASE_URL environment variable",
 	)
