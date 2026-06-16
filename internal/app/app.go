@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/sylvain/postgresql-mcp/internal/logger"
 	"golang.org/x/sync/singleflight"
@@ -80,9 +81,16 @@ type ExecuteQueryOptions struct {
 // explicit connect_database session is not silently overridden by
 // POSTGRES_URL / DATABASE_URL on the next ping failure (issue #87).
 type App struct {
-	client         PostgreSQLClient
-	logger         *slog.Logger
+	client PostgreSQLClient
+	// logger is held as an atomic.Pointer (mirroring the pool's atomic.Pointer
+	// in client.go) so SetLogger can be called concurrently with handler
+	// goroutines without a data race. Read it via the log() accessor.
+	logger         atomic.Pointer[slog.Logger]
 	reconnectGroup singleflight.Group
+
+	// connectMu serializes Connect's Ping→Close→Connect sequence so two
+	// concurrent connect_database requests cannot race on pool replacement.
+	connectMu sync.Mutex
 
 	connStrMu sync.RWMutex
 	connStr   string
@@ -92,10 +100,9 @@ type App struct {
 // This constructor accepts a client implementation for dependency injection,
 // making it easy to inject mocks or alternative implementations for testing.
 func New(client PostgreSQLClient) *App {
-	return &App{
-		client: client,
-		logger: logger.NewLogger("info"),
-	}
+	a := &App{client: client}
+	a.logger.Store(logger.NewLogger("info"))
+	return a
 }
 
 // NewDefault creates a new App instance with a default PostgreSQLClient.
@@ -103,10 +110,8 @@ func New(client PostgreSQLClient) *App {
 // This is a convenience constructor for production use.
 func NewDefault() (*App, error) {
 	client := NewPostgreSQLClient()
-	app := &App{
-		client: client,
-		logger: logger.NewLogger("info"),
-	}
+	app := &App{client: client}
+	app.logger.Store(logger.NewLogger("info"))
 
 	// Note: Connection is now explicit via Connect() or connect_database tool
 	// Environment variables are still supported as fallback via tryConnect()
@@ -114,9 +119,10 @@ func NewDefault() (*App, error) {
 	return app, nil
 }
 
-// SetLogger sets the logger for the app.
+// SetLogger sets the logger for the app. Safe to call concurrently with
+// in-flight handlers (see the logger field comment on App).
 func (a *App) SetLogger(logger *slog.Logger) {
-	a.logger = logger
+	a.logger.Store(logger)
 }
 
 // Connect establishes a database connection with the provided connection string.
@@ -126,20 +132,26 @@ func (a *App) Connect(ctx context.Context, connectionString string) error {
 		return ErrNoConnectionString
 	}
 
+	// Serialize the Ping→Close→Connect sequence so two concurrent
+	// connect_database requests cannot race on pool replacement. connectMu is
+	// a leaf lock: nothing reached from here re-acquires it.
+	a.connectMu.Lock()
+	defer a.connectMu.Unlock()
+
 	// Close existing connection if any
 	if a.client != nil {
 		if err := a.client.Ping(ctx); err == nil {
 			// Connection exists and is active, close it first
 			if closeErr := a.client.Close(); closeErr != nil {
-				a.logger.Warn("Failed to close existing connection", "error", closeErr)
+				a.log().Warn("Failed to close existing connection", "error", closeErr)
 			}
 		}
 	}
 
-	a.logger.Debug("Connecting to PostgreSQL database")
+	a.log().Debug("Connecting to PostgreSQL database")
 
 	if err := a.client.Connect(ctx, connectionString); err != nil {
-		a.logger.Error("Failed to connect to database", "error", err)
+		a.log().Error("Failed to connect to database", "error", err)
 		return fmt.Errorf("failed to connect: %w", err)
 	}
 
@@ -149,7 +161,7 @@ func (a *App) Connect(ctx context.Context, connectionString string) error {
 	a.connStr = connectionString
 	a.connStrMu.Unlock()
 
-	a.logger.Info("Successfully connected to PostgreSQL database")
+	a.log().Info("Successfully connected to PostgreSQL database")
 	return nil
 }
 
@@ -169,15 +181,15 @@ func (a *App) ListDatabases(ctx context.Context) ([]*DatabaseInfo, error) {
 		return nil, fmt.Errorf("failed to list databases: %w", err)
 	}
 
-	a.logger.Debug("Listing databases")
+	a.log().Debug("Listing databases")
 
 	databases, err := a.client.ListDatabases(ctx)
 	if err != nil {
-		a.logger.Error("Failed to list databases", "error", err)
+		a.log().Error("Failed to list databases", "error", err)
 		return nil, fmt.Errorf("failed to list databases: %w", err)
 	}
 
-	a.logger.Debug("Successfully listed databases", "count", len(databases))
+	a.log().Debug("Successfully listed databases", "count", len(databases))
 	return databases, nil
 }
 
@@ -187,15 +199,15 @@ func (a *App) ListSchemas(ctx context.Context) ([]*SchemaInfo, error) {
 		return nil, fmt.Errorf("failed to list schemas: %w", err)
 	}
 
-	a.logger.Debug("Listing schemas")
+	a.log().Debug("Listing schemas")
 
 	schemas, err := a.client.ListSchemas(ctx)
 	if err != nil {
-		a.logger.Error("Failed to list schemas", "error", err)
+		a.log().Error("Failed to list schemas", "error", err)
 		return nil, fmt.Errorf("failed to list schemas: %w", err)
 	}
 
-	a.logger.Debug("Successfully listed schemas", "count", len(schemas))
+	a.log().Debug("Successfully listed schemas", "count", len(schemas))
 	return schemas, nil
 }
 
@@ -210,7 +222,7 @@ func (a *App) ListTables(ctx context.Context, opts *ListTablesOptions) ([]*Table
 		schema = opts.Schema
 	}
 
-	a.logger.Debug("Listing tables", "schema", schema)
+	a.log().Debug("Listing tables", "schema", schema)
 
 	var tables []*TableInfo
 	var err error
@@ -219,18 +231,18 @@ func (a *App) ListTables(ctx context.Context, opts *ListTablesOptions) ([]*Table
 	if opts != nil && opts.IncludeSize {
 		tables, err = a.client.ListTablesWithStats(ctx, schema)
 		if err != nil {
-			a.logger.Error("Failed to list tables with stats", "error", err, "schema", schema)
+			a.log().Error("Failed to list tables with stats", "error", err, "schema", schema)
 			return nil, fmt.Errorf("failed to list tables with stats: %w", err)
 		}
 	} else {
 		tables, err = a.client.ListTables(ctx, schema)
 		if err != nil {
-			a.logger.Error("Failed to list tables", "error", err, "schema", schema)
+			a.log().Error("Failed to list tables", "error", err, "schema", schema)
 			return nil, fmt.Errorf("failed to list tables: %w", err)
 		}
 	}
 
-	a.logger.Debug("Successfully listed tables", "count", len(tables), "schema", schema)
+	a.log().Debug("Successfully listed tables", "count", len(tables), "schema", schema)
 	return tables, nil
 }
 
@@ -248,15 +260,15 @@ func (a *App) DescribeTable(ctx context.Context, schema, table string) ([]*Colum
 		schema = DefaultSchema
 	}
 
-	a.logger.Debug("Describing table", "schema", schema, "table", table)
+	a.log().Debug("Describing table", "schema", schema, "table", table)
 
 	columns, err := a.client.DescribeTable(ctx, schema, table)
 	if err != nil {
-		a.logger.Error("Failed to describe table", "error", err, "schema", schema, "table", table)
+		a.log().Error("Failed to describe table", "error", err, "schema", schema, "table", table)
 		return nil, fmt.Errorf("failed to describe table: %w", err)
 	}
 
-	a.logger.Debug("Successfully described table", "column_count", len(columns), "schema", schema, "table", table)
+	a.log().Debug("Successfully described table", "column_count", len(columns), "schema", schema, "table", table)
 	return columns, nil
 }
 
@@ -274,15 +286,15 @@ func (a *App) GetTableStats(ctx context.Context, schema, table string) (*TableIn
 		schema = DefaultSchema
 	}
 
-	a.logger.Debug("Getting table stats", "schema", schema, "table", table)
+	a.log().Debug("Getting table stats", "schema", schema, "table", table)
 
 	stats, err := a.client.GetTableStats(ctx, schema, table)
 	if err != nil {
-		a.logger.Error("Failed to get table stats", "error", err, "schema", schema, "table", table)
+		a.log().Error("Failed to get table stats", "error", err, "schema", schema, "table", table)
 		return nil, fmt.Errorf("failed to get table stats: %w", err)
 	}
 
-	a.logger.Debug("Successfully retrieved table stats", "schema", schema, "table", table)
+	a.log().Debug("Successfully retrieved table stats", "schema", schema, "table", table)
 	return stats, nil
 }
 
@@ -300,15 +312,15 @@ func (a *App) ListIndexes(ctx context.Context, schema, table string) ([]*IndexIn
 		schema = DefaultSchema
 	}
 
-	a.logger.Debug("Listing indexes", "schema", schema, "table", table)
+	a.log().Debug("Listing indexes", "schema", schema, "table", table)
 
 	indexes, err := a.client.ListIndexes(ctx, schema, table)
 	if err != nil {
-		a.logger.Error("Failed to list indexes", "error", err, "schema", schema, "table", table)
+		a.log().Error("Failed to list indexes", "error", err, "schema", schema, "table", table)
 		return nil, fmt.Errorf("failed to list indexes: %w", err)
 	}
 
-	a.logger.Debug("Successfully listed indexes", "count", len(indexes), "schema", schema, "table", table)
+	a.log().Debug("Successfully listed indexes", "count", len(indexes), "schema", schema, "table", table)
 	return indexes, nil
 }
 
@@ -322,7 +334,7 @@ func (a *App) ExecuteQuery(ctx context.Context, opts *ExecuteQueryOptions) (*Que
 		return nil, ErrQueryRequired
 	}
 
-	a.logger.Debug("Executing query", "query", truncateQuery(opts.Query, maxQueryLogLen), "limit", opts.Limit)
+	a.log().Debug("Executing query", "query", truncateQuery(opts.Query, maxQueryLogLen), "limit", opts.Limit)
 
 	query := opts.Query
 	if opts.Limit > 0 {
@@ -334,11 +346,11 @@ func (a *App) ExecuteQuery(ctx context.Context, opts *ExecuteQueryOptions) (*Que
 		if ok, rejErr := a.rejectQuery(opts.Query, err); ok {
 			return nil, rejErr
 		}
-		a.logger.Error("Failed to execute query", "error", err, "query", truncateQuery(opts.Query, maxQueryLogLen))
+		a.log().Error("Failed to execute query", "error", err, "query", truncateQuery(opts.Query, maxQueryLogLen))
 		return nil, fmt.Errorf("failed to execute query: %w", err)
 	}
 
-	a.logger.Debug("Successfully executed query", "row_count", result.RowCount)
+	a.log().Debug("Successfully executed query", "row_count", result.RowCount)
 	return result, nil
 }
 
@@ -369,18 +381,18 @@ func (a *App) ExplainQuery(ctx context.Context, query string, analyze bool, args
 		return nil, ErrQueryRequired
 	}
 
-	a.logger.Debug("Explaining query", "query", truncateQuery(query, maxQueryLogLen), "analyze", analyze)
+	a.log().Debug("Explaining query", "query", truncateQuery(query, maxQueryLogLen), "analyze", analyze)
 
 	result, err := a.client.ExplainQuery(ctx, query, analyze, args...)
 	if err != nil {
 		if ok, rejErr := a.rejectQuery(query, err); ok {
 			return nil, rejErr
 		}
-		a.logger.Error("Failed to explain query", "error", err, "query", truncateQuery(query, maxQueryLogLen))
+		a.log().Error("Failed to explain query", "error", err, "query", truncateQuery(query, maxQueryLogLen))
 		return nil, fmt.Errorf("failed to explain query: %w", err)
 	}
 
-	a.logger.Debug("Successfully explained query")
+	a.log().Debug("Successfully explained query")
 	return result, nil
 }
 
@@ -396,6 +408,11 @@ func (a *App) ValidateConnection(ctx context.Context) error {
 		return fmt.Errorf("connection validation failed: %w", err)
 	}
 	return nil
+}
+
+// log returns the current logger via a lock-free atomic load.
+func (a *App) log() *slog.Logger {
+	return a.logger.Load()
 }
 
 // tryConnect picks the connection string for an (initial or recovery) Connect.
@@ -492,12 +509,12 @@ func (a *App) doReconnect() (any, error) {
 		return reconnectResult{}, nil
 	}
 
-	a.logger.Debug("No database connection, attempting to establish one")
+	a.log().Debug("No database connection, attempting to establish one")
 	if err := a.tryConnect(reconnectCtx); err != nil {
-		a.logger.Error("Failed to establish database connection", "error", err)
+		a.log().Error("Failed to establish database connection", "error", err)
 		return reconnectResult{}, err
 	}
-	a.logger.Info("Successfully established database connection")
+	a.log().Info("Successfully established database connection")
 	return reconnectResult{}, nil
 }
 
@@ -525,7 +542,7 @@ func (a *App) rejectQuery(query string, err error) (bool, error) {
 // logSecurityEvent logs a security-relevant event (e.g., rejected query)
 // with structured fields for monitoring and incident response.
 func (a *App) logSecurityEvent(event string, query string, reason error) {
-	a.logger.Warn("Security: query rejected",
+	a.log().Warn("Security: query rejected",
 		"event", event,
 		"reason", reason.Error(),
 		"query_preview", truncateQuery(query, maxQueryLogLen),
