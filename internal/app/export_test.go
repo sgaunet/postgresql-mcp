@@ -55,4 +55,4 @@ func (a *App) EnsureConnection(ctx context.Context) error { return a.ensureConne
 func (a *App) Client() PostgreSQLClient { return a.client }
 
 // Logger exposes the unexported logger field for black-box tests.
-func (a *App) Logger() *slog.Logger { return a.logger }
+func (a *App) Logger() *slog.Logger { return a.logger.Load() }
