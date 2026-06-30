@@ -422,6 +422,39 @@ func TestBuildConnectionString_RejectsInvalidSSLMode(t *testing.T) {
 	}
 }
 
+// TestGetConnectionString_ConnectionURL covers the connection_url branch, which
+// now validates with pgx's own parser (app.ValidateConnectionString). The DSN
+// cases guard review finding H2: keyword/value strings are now validated too.
+func TestGetConnectionString_ConnectionURL(t *testing.T) {
+	silent := slog.New(slog.DiscardHandler)
+
+	cases := []struct {
+		name    string
+		connURL string
+		wantErr bool
+	}{
+		{"url valid", "postgres://u:p@localhost:5432/db?sslmode=require", false},
+		{"url no sslmode", "postgres://u:p@localhost:5432/db", false},
+		{"url invalid sslmode", "postgres://u:p@localhost:5432/db?sslmode=banana", true},
+		{"dsn valid", "host=localhost dbname=db user=u sslmode=disable", false},
+		{"dsn invalid sslmode", "host=localhost dbname=db user=u sslmode=banana", true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			connStr, err := getConnectionString(map[string]any{"connection_url": tc.connURL}, silent)
+			if tc.wantErr {
+				require.Error(t, err)
+				assert.ErrorIs(t, err, app.ErrInvalidConnectionParameters)
+				assert.Empty(t, connStr)
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, tc.connURL, connStr)
+			}
+		})
+	}
+}
+
 // stubFailingClient is a minimal app.PostgreSQLClient where Connect returns
 // a configurable error and Ping always reports "not connected" (so
 // app.Connect skips the existing-connection Close branch). All other

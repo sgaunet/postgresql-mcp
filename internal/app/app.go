@@ -109,64 +109,35 @@ func New(client PostgreSQLClient) *App {
 // Use Connect() method or connect_database tool to establish connection.
 // This is a convenience constructor for production use.
 func NewDefault() (*App, error) {
-	client := NewPostgreSQLClient()
-	app := &App{client: client}
-	app.logger.Store(logger.NewLogger("info"))
-
-	// Note: Connection is now explicit via Connect() or connect_database tool
-	// Environment variables are still supported as fallback via tryConnect()
-
-	return app, nil
+	// Connection is established lazily and explicitly via Connect() or the
+	// connect_database tool; env vars (POSTGRES_URL/DATABASE_URL) remain a
+	// fallback via tryConnect.
+	return New(NewPostgreSQLClient()), nil
 }
 
 // SetLogger sets the logger for the app. Safe to call concurrently with
-// in-flight handlers (see the logger field comment on App).
+// in-flight handlers (see the logger field comment on App). A nil logger is
+// ignored so a later log() load cannot return nil and panic on use.
 func (a *App) SetLogger(logger *slog.Logger) {
+	if logger == nil {
+		return
+	}
 	a.logger.Store(logger)
 }
 
 // Connect establishes a database connection with the provided connection string.
 // If a connection already exists, it will be closed before establishing a new one.
+// This is the explicit (connect_database) path: it always replaces any existing
+// connection. The implementation lives in the unexported connect method.
 func (a *App) Connect(ctx context.Context, connectionString string) error {
-	if connectionString == "" {
-		return ErrNoConnectionString
-	}
-
-	// Serialize the Ping→Close→Connect sequence so two concurrent
-	// connect_database requests cannot race on pool replacement. connectMu is
-	// a leaf lock: nothing reached from here re-acquires it.
-	a.connectMu.Lock()
-	defer a.connectMu.Unlock()
-
-	// Close existing connection if any
-	if a.client != nil {
-		if err := a.client.Ping(ctx); err == nil {
-			// Connection exists and is active, close it first
-			if closeErr := a.client.Close(); closeErr != nil {
-				a.log().Warn("Failed to close existing connection", "error", closeErr)
-			}
-		}
-	}
-
-	a.log().Debug("Connecting to PostgreSQL database")
-
-	if err := a.client.Connect(ctx, connectionString); err != nil {
-		a.log().Error("Failed to connect to database", "error", err)
-		return fmt.Errorf("failed to connect: %w", err)
-	}
-
-	// Remember the string that established this session so that automatic
-	// reconnects target the same database (issue #87).
-	a.connStrMu.Lock()
-	a.connStr = connectionString
-	a.connStrMu.Unlock()
-
-	a.log().Info("Successfully connected to PostgreSQL database")
-	return nil
+	return a.connect(ctx, connectionString, true)
 }
 
-// Disconnect closes the database connection.
+// Disconnect closes the database connection. It takes connectMu so it cannot
+// race with Connect's pool-replacement sequence and null out a pool mid-connect.
 func (a *App) Disconnect() error {
+	a.connectMu.Lock()
+	defer a.connectMu.Unlock()
 	if a.client != nil {
 		if err := a.client.Close(); err != nil {
 			return fmt.Errorf("failed to close database connection: %w", err)
@@ -415,6 +386,58 @@ func (a *App) log() *slog.Logger {
 	return a.logger.Load()
 }
 
+// connect performs the Ping→Close→Connect sequence under connectMu.
+//
+// replaceExisting distinguishes the two callers:
+//   - true  (explicit connect_database): always replace the current connection.
+//   - false (auto-reconnect via tryConnect): if a pool already exists by the
+//     time we hold connectMu — e.g. a concurrent connect_database won the lock
+//     and established one — reuse it instead of tearing a healthy pool down and
+//     rebuilding it, which would drop in-flight queries (review finding H3).
+func (a *App) connect(ctx context.Context, connectionString string, replaceExisting bool) error {
+	if connectionString == "" {
+		return ErrNoConnectionString
+	}
+
+	// Serialize the Ping→Close→Connect sequence so two concurrent
+	// connect_database requests cannot race on pool replacement. connectMu is
+	// a leaf lock: nothing reached from here re-acquires it.
+	a.connectMu.Lock()
+	defer a.connectMu.Unlock()
+
+	// Re-check under the lock: on the reconnect path a connection may have been
+	// established while we waited for connectMu, so there is nothing to do.
+	if !replaceExisting && a.client != nil && a.client.HasConnection() {
+		return nil
+	}
+
+	// Close existing connection if any
+	if a.client != nil {
+		if err := a.client.Ping(ctx); err == nil {
+			// Connection exists and is active, close it first
+			if closeErr := a.client.Close(); closeErr != nil {
+				a.log().Warn("Failed to close existing connection", "error", closeErr)
+			}
+		}
+	}
+
+	a.log().Debug("Connecting to PostgreSQL database")
+
+	if err := a.client.Connect(ctx, connectionString); err != nil {
+		a.log().Error("Failed to connect to database", "error", err)
+		return fmt.Errorf("failed to connect: %w", err)
+	}
+
+	// Remember the string that established this session so that automatic
+	// reconnects target the same database (issue #87).
+	a.connStrMu.Lock()
+	a.connStr = connectionString
+	a.connStrMu.Unlock()
+
+	a.log().Info("Successfully connected to PostgreSQL database")
+	return nil
+}
+
 // tryConnect picks the connection string for an (initial or recovery) Connect.
 //
 // Sticky-session: if a prior Connect succeeded, reuse the same connection
@@ -431,7 +454,9 @@ func (a *App) tryConnect(ctx context.Context) error {
 	a.connStrMu.RUnlock()
 
 	if stored != "" {
-		return a.Connect(ctx, stored)
+		// Already validated when it was first stored, and connect with
+		// replaceExisting=false so a concurrent connect_database is not undone.
+		return a.connect(ctx, stored, false)
 	}
 
 	// Initial bootstrap only: env-var fallback.
@@ -442,7 +467,13 @@ func (a *App) tryConnect(ctx context.Context) error {
 	if connectionString == "" {
 		return ErrNoConnectionString
 	}
-	return a.Connect(ctx, connectionString)
+	// Validate the env-derived string up front so a malformed POSTGRES_URL /
+	// DATABASE_URL fails fast with a clear error, at parity with the
+	// connection_url path, instead of an opaque pgx parse failure inside connect.
+	if err := ValidateConnectionString(connectionString); err != nil {
+		return err
+	}
+	return a.connect(ctx, connectionString, false)
 }
 
 // ensureConnection makes sure a usable connection pool exists before a database

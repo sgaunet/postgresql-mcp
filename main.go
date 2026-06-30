@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -44,6 +45,18 @@ var validSSLModes = map[string]struct{}{
 	"verify-ca":   {},
 	"verify-full": {},
 }
+
+// validSSLModeList is the sorted, comma-joined rendering of validSSLModes,
+// computed once so error messages and the tool description share a single
+// source of truth and cannot drift from the allowlist.
+var validSSLModeList = func() string {
+	modes := make([]string, 0, len(validSSLModes))
+	for m := range validSSLModes {
+		modes = append(modes, m)
+	}
+	sort.Strings(modes)
+	return strings.Join(modes, ", ")
+}()
 
 // ConnectionParams represents individual database connection parameters.
 type ConnectionParams struct {
@@ -86,8 +99,8 @@ func buildConnectionString(params ConnectionParams) (string, error) {
 		sslMode = "prefer" // PostgreSQL default SSL mode
 	}
 	if _, ok := validSSLModes[sslMode]; !ok {
-		return "", fmt.Errorf("%w: %q (allowed: disable, allow, prefer, require, verify-ca, verify-full)",
-			app.ErrInvalidSSLMode, sslMode)
+		return "", fmt.Errorf("%w: %q (allowed: %s)",
+			app.ErrInvalidSSLMode, sslMode, validSSLModeList)
 	}
 
 	// Build via net/url so credentials and host are encoded correctly. Use
@@ -138,30 +151,6 @@ func extractConnectionParams(args map[string]any) ConnectionParams {
 	return params
 }
 
-// validateConnectionURLSSLMode parses a postgres URL and, when an sslmode query
-// parameter is present, checks it against validSSLModes — bringing the
-// connection_url path to parity with the parameter-build path
-// (buildConnectionString), so an unrecognized sslmode fails fast with a clear
-// error instead of an opaque pgx parse failure later. An absent sslmode is
-// allowed (libpq defaults to prefer).
-//
-// Limitation: only URL-form strings are introspected. A keyword/value DSN
-// (e.g. "host=... sslmode=disable") is not parsed by net/url and passes
-// through unchecked; the documented connection_url input is the URL form.
-func validateConnectionURLSSLMode(connURL string) error {
-	u, err := url.Parse(connURL)
-	if err != nil {
-		return fmt.Errorf("%w: unparseable connection_url", app.ErrInvalidConnectionParameters)
-	}
-	if mode := u.Query().Get("sslmode"); mode != "" {
-		if _, ok := validSSLModes[mode]; !ok {
-			return fmt.Errorf("%w: %q (allowed: disable, allow, prefer, require, verify-ca, verify-full)",
-				app.ErrInvalidSSLMode, mode)
-		}
-	}
-	return nil
-}
-
 // getConnectionString determines the connection string from args.
 func getConnectionString(
 	args map[string]any,
@@ -169,9 +158,13 @@ func getConnectionString(
 ) (string, error) {
 	// Check if full connection URL is provided
 	if connURL, ok := args["connection_url"].(string); ok && connURL != "" {
-		if err := validateConnectionURLSSLMode(connURL); err != nil {
+		// Validate with pgx's own parser so the check matches what Connect will
+		// accept — covering URL and keyword/value DSN forms and rejecting unknown
+		// sslmode values early, before the generic-error connect path masks the
+		// reason (issue #88).
+		if err := app.ValidateConnectionString(connURL); err != nil {
 			debugLogger.Error("Invalid connection_url", "error", err)
-			return "", err
+			return "", fmt.Errorf("invalid connection_url: %w", err)
 		}
 		debugLogger.Debug("Using provided connection URL")
 		return connURL, nil
@@ -288,7 +281,7 @@ func setupConnectDatabaseTool(s *server.MCPServer, appInstance *app.App, debugLo
 			mcp.Description("Database name"),
 		),
 		mcp.WithString("sslmode",
-			mcp.Description("SSL mode: disable, allow, prefer, require, verify-ca, verify-full (default: prefer)"),
+			mcp.Description("SSL mode, one of: "+validSSLModeList+" (default: prefer)"),
 		),
 	)
 

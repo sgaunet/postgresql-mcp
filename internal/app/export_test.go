@@ -51,6 +51,12 @@ func TruncateQuery(query string, maxLen int) string { return truncateQuery(query
 // EnsureConnection exposes the unexported ensureConnection method for black-box tests.
 func (a *App) EnsureConnection(ctx context.Context) error { return a.ensureConnection(ctx) }
 
+// ConnectIfNeeded exposes the reconnect-path connect(replaceExisting=false) for
+// black-box tests of the no-op-when-already-connected behavior (finding H3).
+func (a *App) ConnectIfNeeded(ctx context.Context, connStr string) error {
+	return a.connect(ctx, connStr, false)
+}
+
 // Client exposes the unexported client field for black-box tests.
 func (a *App) Client() PostgreSQLClient { return a.client }
 
