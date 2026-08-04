@@ -1,7 +1,6 @@
 # PostgreSQL MCP Server
 
 [![GitHub release](https://img.shields.io/github/release/sgaunet/postgresql-mcp.svg)](https://github.com/sgaunet/postgresql-mcp/releases/latest)
-[![Go Report Card](https://goreportcard.com/badge/github.com/sgaunet/postgresql-mcp)](https://goreportcard.com/report/github.com/sgaunet/postgresql-mcp)
 ![GitHub Downloads](https://img.shields.io/github/downloads/sgaunet/postgresql-mcp/total)
 ![Coverage](https://raw.githubusercontent.com/wiki/sgaunet/postgresql-mcp/coverage-badge.svg)
 [![coverage](https://github.com/sgaunet/postgresql-mcp/actions/workflows/coverage.yml/badge.svg)](https://github.com/sgaunet/postgresql-mcp/actions/workflows/coverage.yml)
