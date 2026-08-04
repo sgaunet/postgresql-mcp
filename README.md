@@ -85,12 +85,49 @@ brew install sgaunet/tools/postgresql-mcp
 
 ## Installation for a project
 
-Add the MCP server in the configuration of the project. At the root of your project, create a file named `.mcap.json' with the following content:
+A PostgreSQL connection is specific to the project you are working on, so declare the MCP server at the project level rather than globally.
+
+### Option 1: Add it with the `claude` CLI (Recommended)
+
+Run this from the root of the project that needs database access:
+
+```bash
+claude mcp add -s project \
+  --env "POSTGRES_URL=postgres://postgres:password@localhost:5432/postgres?sslmode=disable" \
+  --transport stdio postgresql postgresql-mcp
+```
+
+Breakdown of the command:
+
+| Part | Meaning |
+|------|---------|
+| `-s project` | Writes the server to `.mcp.json` in the current directory (project scope) instead of your user-wide config |
+| `--env "POSTGRES_URL=..."` | Sets the connection URL for the server process (see [Configuration](#configuration) for all supported variables) |
+| `--transport stdio` | The server talks MCP over stdio |
+| `postgresql` | The name the server is registered under in Claude Code |
+| `postgresql-mcp` | The command to run — must be on your `PATH` (use an absolute path otherwise) |
+
+Then verify the server is registered and reachable:
+
+```bash
+claude mcp list          # show configured servers
+claude mcp get postgresql # show this server's configuration
+```
+
+To remove it again:
+
+```bash
+claude mcp remove -s project postgresql
+```
+
+### Option 2: Write `.mcp.json` by hand
+
+At the root of your project, create a file named `.mcp.json` with the following content:
 
 ```json
 {
   "mcpServers": {
-    "postgres": {
+    "postgresql": {
       "type": "stdio",
       "command": "postgresql-mcp",
       "args": [],
@@ -102,7 +139,9 @@ Add the MCP server in the configuration of the project. At the root of your proj
 }
 ```
 
-Don't forget to add the .mcp.json file in your .gitignore file if you don't want to commit it. It usually make sense to declare the MCP server for postgresl at the project level, as the database connection is project specific.
+This is the same file the `claude mcp add -s project` command writes for you.
+
+**Note:** `.mcp.json` contains your database credentials. Add it to your `.gitignore` if you don't want to commit it, or omit `--env`/the `env` block and export `POSTGRES_URL` in your shell instead.
 
 ## Configuration
 
@@ -158,9 +197,14 @@ This MCP server is designed with security as a priority:
 
 ## Usage with Claude Code
 
-1. **Configure the MCP server in your Claude Code settings.**
+1. **Register the MCP server in the project that needs it** — see [Installation for a project](#installation-for-a-project):
+   ```bash
+   claude mcp add -s project \
+     --env "POSTGRES_URL=postgres://postgres:password@localhost:5432/postgres?sslmode=disable" \
+     --transport stdio postgresql postgresql-mcp
+   ```
 
-2. **Set up your database connection via environment variables:**
+2. **Or set up your database connection via environment variables** instead of `--env`:
    ```bash
    export POSTGRES_URL="postgres://user:pass@localhost:5432/mydb"
    ```
