@@ -52,3 +52,4 @@ tmp/
 temp/
 
 /dist
+/govulncheck.sarif
