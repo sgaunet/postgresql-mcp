@@ -733,8 +733,7 @@ func BenchmarkIntegration_ListTables(b *testing.B) {
 		Schema: "test_mcp_schema",
 	}
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_, err := appInstance.ListTables(ctx, listOpts)
 		if err != nil {
 			b.Fatal(err)
@@ -765,8 +764,7 @@ func BenchmarkIntegration_ExecuteQuery(b *testing.B) {
 		Query: "SELECT COUNT(*) FROM test_mcp_schema.test_users",
 	}
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_, err := appInstance.ExecuteQuery(ctx, queryOpts)
 		if err != nil {
 			b.Fatal(err)

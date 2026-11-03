@@ -456,8 +456,7 @@ func marshalToJSON(data any, debugLogger *slog.Logger, errorMsg string) ([]byte,
 // (fmt.Errorf("failed to <op>: %w", err)); publicError adds none of its own, so
 // handlers no longer double-prefix the message. See issue #103.
 func publicError(err error) string {
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) {
+	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok {
 		sanitized := fmt.Sprintf("%s (SQLSTATE %s)", pgErr.Message, pgErr.Code)
 		// Preserve any wrapping the App layer added (e.g. "failed to list
 		// databases: ") while replacing the raw error text with the sanitized
