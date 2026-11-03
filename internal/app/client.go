@@ -97,14 +97,11 @@ func injectOption(connStr, opt string) string {
 		if err != nil {
 			return connStr
 		}
-		q := u.Query()
-		existing := q.Get("options")
-		if existing != "" {
-			q.Set("options", existing+" "+opt)
-		} else {
-			q.Set("options", opt)
+		rawQuery, err := appendURIQueryOption(u.RawQuery, opt)
+		if err != nil {
+			return connStr
 		}
-		u.RawQuery = q.Encode()
+		u.RawQuery = rawQuery
 		return u.String()
 	}
 
@@ -136,6 +133,54 @@ func injectOption(connStr, opt string) string {
 	}
 	existing := connStr[valStart:valEnd]
 	return connStr[:optionsIdx] + "options='" + existing + " " + opt + "'" + connStr[valEnd:]
+}
+
+// appendURIQueryOption appends opt to the options= parameter of a raw URI query
+// string, leaving every other parameter byte-for-byte intact.
+//
+// It deliberately avoids url.Values: Query()/Encode() use form encoding, where
+// '+' means space, but pgx (>= v5.12, matching libpq) treats '+' in URI query
+// values as a literal plus. Round-tripping through url.Values therefore turned
+// "-c default_transaction_read_only=on" into "-c+default_transaction_read_only=on",
+// which PostgreSQL rejects, and would also corrupt any literal '+' in other
+// parameters. Values are decoded with PathUnescape ('+' stays literal) and the
+// merged options value is re-encoded with spaces as %20. When options= appears
+// more than once, the last occurrence is the one extended, mirroring pgx's
+// last-occurrence-wins rule.
+func appendURIQueryOption(rawQuery, opt string) (string, error) {
+	var params []string
+	if rawQuery != "" {
+		params = strings.Split(rawQuery, "&")
+	}
+
+	kept := make([]string, 0, len(params)+1)
+	existing := ""
+	for _, param := range params {
+		rawKey, rawVal, _ := strings.Cut(param, "=")
+		key, err := url.PathUnescape(rawKey)
+		if err != nil {
+			return "", fmt.Errorf("invalid query key %q: %w", rawKey, err)
+		}
+		if key != "options" {
+			kept = append(kept, param)
+			continue
+		}
+		val, err := url.PathUnescape(rawVal)
+		if err != nil {
+			return "", fmt.Errorf("invalid options value: %w", err)
+		}
+		existing = val
+	}
+
+	merged := opt
+	if existing != "" {
+		merged = existing + " " + opt
+	}
+	// QueryEscape encodes a literal '+' as %2B, so any '+' left in its output
+	// stands for a space and can safely be rewritten to %20.
+	encoded := strings.ReplaceAll(url.QueryEscape(merged), "+", "%20")
+	kept = append(kept, "options="+encoded)
+	return strings.Join(kept, "&"), nil
 }
 
 // injectReadOnlyOption appends default_transaction_read_only=on to the connection

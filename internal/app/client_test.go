@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/sylvain/postgresql-mcp/internal/app"
@@ -704,6 +705,65 @@ func TestInjectReadOnlyOption_UnquotedOptions_ProducesValidQuotedForm(t *testing
 		"unquoted options must be merged into a single quoted value with read-only appended")
 	assert.Contains(t, out, "host=localhost", "leading keyword must be preserved")
 	assert.Contains(t, out, "dbname=mydb", "trailing keyword must be preserved")
+}
+
+// TestInjectOptions_URL_ParsedByPgx feeds the injected URL-style DSNs through
+// pgx's own parser and asserts the exact server options PostgreSQL will see.
+// pgx >= v5.12 treats '+' in URI query values as a literal plus (libpq
+// semantics), so form-encoding the options payload produced
+// "-c+default_transaction_read_only=on" and every connection failed with
+// "unrecognized configuration parameter". Contains-style assertions on the raw
+// string cannot catch that; parsing with pgconn can.
+func TestInjectOptions_URL_ParsedByPgx(t *testing.T) {
+	const want = "-c default_transaction_read_only=on -c statement_timeout=30000"
+
+	tests := []struct {
+		name        string
+		input       string
+		wantOptions string
+		wantParams  map[string]string
+	}{
+		{
+			name:        "no existing query",
+			input:       "postgres://u:p@localhost:5432/db",
+			wantOptions: want,
+		},
+		{
+			name:        "existing sslmode is preserved",
+			input:       "postgres://u:p@localhost:5432/db?sslmode=disable",
+			wantOptions: want,
+		},
+		{
+			name:        "existing options are kept ahead of injected ones",
+			input:       "postgresql://u:p@localhost/db?options=-c%20search_path%3Dpublic",
+			wantOptions: "-c search_path=public " + want,
+		},
+		{
+			name:        "literal plus in another parameter is not turned into a space",
+			input:       "postgres://u:p@localhost/db?application_name=a+b",
+			wantOptions: want,
+			wantParams:  map[string]string{"application_name": "a+b"},
+		},
+		{
+			name:        "literal plus inside existing options survives",
+			input:       "postgres://u:p@localhost/db?options=-c%20timezone%3DEtc/GMT+3",
+			wantOptions: "-c timezone=Etc/GMT+3 " + want,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out := app.InjectStatementTimeout(app.InjectReadOnlyOption(tt.input), 30*time.Second)
+
+			cfg, err := pgconn.ParseConfig(out)
+			require.NoError(t, err, "injected DSN must parse: %s", out)
+			assert.Equal(t, tt.wantOptions, cfg.RuntimeParams["options"], "DSN: %s", out)
+			for k, v := range tt.wantParams {
+				assert.Equal(t, v, cfg.RuntimeParams[k], "param %s; DSN: %s", k, out)
+			}
+			assert.NotContains(t, out, "+default_transaction_read_only")
+		})
+	}
 }
 
 // TestInjectReadOnlyOption_UnterminatedQuotedOptions_LeftAlone covers the

@@ -1,7 +1,7 @@
 [tools]
-go = "1.26.6"
+go = "1.27.3"
 task = "3.40.1"
-golangci-lint = "2.12.1"
+golangci-lint = "2.15.0"
 goreleaser = "2.16.0"
 syft = "1.45.1"
 "go:golang.org/x/tools/gopls" = "0.23.0"

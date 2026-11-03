@@ -17,6 +17,7 @@ linters:
     - forbidigo
     - varnamelen
     - exhaustruct
+    - exhaustruct_v5
     - tagliatelle
     - noinlineerr
     - lll  # Disable line length linter
